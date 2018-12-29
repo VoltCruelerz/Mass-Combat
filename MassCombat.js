@@ -3,7 +3,7 @@
 * A companion script for Kyburn's Mass Combat rule set: 
 * https://docs.google.com/document/d/1-56AC-p57x-vr_BzszksjC55kTFK4d67XOzcIb1pWCY/edit?usp=sharing
 *
-* by Michael Greene
+* by Michael Greene (Volt Cruelerz)
 *
 */
 
