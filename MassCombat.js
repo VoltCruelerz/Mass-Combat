@@ -46,7 +46,7 @@ on('ready', () => {
         const attr = filterObjs((obj) => {
             if (obj.get('type') === 'attribute'
                 && obj.get('characterid') === char.id
-                && obj.get('name').indexOf(attrName) !== -1) {
+                && obj.get('name') == attrName) {
                     //log('Valid Obj: ' + JSON.stringify(obj));
                     return obj;
             }
@@ -60,6 +60,26 @@ on('ready', () => {
 
     const getAttr = (char, attrName) => {
         return getAttrs(char, attrName)[0];
+    }
+
+    const getAttrsFromSub = (char, substringName) => {
+        const attr = filterObjs((obj) => {
+            if (obj.get('type') === 'attribute'
+                && obj.get('characterid') === char.id
+                && obj.get('name').indexOf(substringName) !== -1) {
+                    //log('Valid Obj: ' + JSON.stringify(obj));
+                    return obj;
+            }
+        });
+        if (!attr || attr.length === 0) {
+            log('No Attr');
+            return null;
+        }
+        return attr;
+    }
+
+    const getAttrFromSub = (char, substringName) => {
+        return getAttrsFromSub(char, substringName)[0];
     }
 
     const sizeCostArray = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0];
@@ -167,16 +187,18 @@ on('ready', () => {
                 // Load charsheet data
                 let char = getCharByAny(formationType);
                 let isNPC = getAttr(char, 'npc').get('current');
-                if (!isNPC) {
+                if (isNPC != 1) {
+                    log(`Selected ${formName} is not an NPC`);
                     heroList.push(new Hero(formName, hp, hpm));
                     return;
                 }
                 let npcType = getAttr(char, 'npc_type').get('current');
                 let cr = parseInt(getAttr(char, 'npc_challenge').get('current'));
                 let xp = parseInt(getAttr(char, 'npc_xp').get('current'));
-                let traits = getAttrs(char, 'npctrait');
+                let traits = getAttrsFromSub(char, 'npctrait');
                 let formationTraitArray = traits.filter(trait => trait.get('current').includes('Formation of'));
                 if(formationTraitArray.length === 0) {
+                    log(`Selected ${formName} has no formation trait`);
                     heroList.push(new Hero(formName, hp, hpm));
                     return;
                 }
