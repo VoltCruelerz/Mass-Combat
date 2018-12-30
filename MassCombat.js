@@ -9,7 +9,14 @@
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.2;
+    const v = 0.3;
+
+    // Initialize the state
+    if (!state.MassCombat) {
+        state.MassCombat = {
+            SavedInitiative: []
+        };
+    }
 
     const getCharByAny = (nameOrId) => {
         let character = null;
@@ -151,22 +158,44 @@ on('ready', () => {
         // List of hero names
         let heroList = [];
 
-        // Print toolbox
-        if (key === '-overview') {
+        // Perform operations without needed selection
+        if (key === '-overview' || key === '-o' || key === '-help') {
             let menuString = `&{template:desc} {{desc=`
             + `<h3>Mass Combat Tools</h3><hr><b>Note:</b> All of these functions require selection of tokens to work.`
             + `<br><br><h4>Battle Commands</h4>`
-            + `<br>[Damage](!mc -damage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount})`
-            + `<br>[Scaled Damage](!mc -scaledDamage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount} ?{Scale})`
-            + `<br>[Route Damage](!mc -routeDamage)`
-            + `<br>[Disorganize](!mc -disorganize ?{Scale})`
-            + `<br>[Recover](!mc -recover)`
+                + `<br>[Damage](!mc -damage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount})`
+                + `<br>[Scaled Damage](!mc -scaledDamage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount} ?{Scale})`
+                + `<br>[Route Damage](!mc -routeDamage)`
+                + `<br>[Disorganize](!mc -disorganize ?{Scale})`
+                + `<br>[Recover](!mc -recover)`
+            + `<br><br><h4>Initiative Commands</h4>`
+                + `<br>[Save Initiative](!mc -saveInitiative)`
+                + `<br>[Load Initiative](!mc -loadInitiative)`
             + `<br><br><h4>Other Commands</h4>`
-            + `<br>[Long Rest](!mc -longrest ?{Sure you want to long rest|yes|no})`
-            + `<br>[Upkeep](!mc -upkeep)`
-            + `<br>[Battle Rating](!mc -battleRating)`
+                + `<br>[Long Rest](!mc -longrest ?{Sure you want to long rest|yes|no})`
+                + `<br>[Upkeep](!mc -upkeep)`
+                + `<br>[Battle Rating](!mc -battleRating)`
             + `}}`;
             sendChat(mcname, menuString);
+            return;
+        } else if (key === '-saveInitiative') {
+            let turnorder = [];
+            let existingOrder = Campaign().get('turnorder');
+            if (existingOrder != '') {
+                turnorder = JSON.parse(existingOrder);
+            } else {
+                sendChat(mcname, 'ERROR: There is no initiative order to save.');
+                return;
+            }
+            state.MassCombat.SavedInitiative = turnorder;
+            let saveMessage = `&{template:desc} {{desc=Turn Order Saved.}}`;
+            sendChat(mcname, saveMessage);
+            return;
+        } else if (key === '-loadInitiative') {
+            Campaign().set('turnorder', JSON.stringify(state.MassCombat.SavedInitiative));
+            state.MassCombat.SavedInitiative = [];
+            let saveMessage = `&{template:desc} {{desc=Turn Order Loaded.}}`;
+            sendChat(mcname, saveMessage);
             return;
         }
 
