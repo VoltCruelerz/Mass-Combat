@@ -90,6 +90,13 @@ on('ready', () => {
         }
     };
 
+    class Hero {
+        constructor(name, hp, mhp) {
+            this.Name = name;
+            this.HP = hp;
+            this.MHP = mhp;
+        }
+    }
 
     on('chat:message', (msg) => {
         if (msg.type !== 'api') return;
@@ -121,17 +128,20 @@ on('ready', () => {
         let purchaseCost = 0;
         let upkeepCost = 0;
 
+        // List of hero names
+        let heroList = [];
+
         // Print toolbox
         if (key === '-overview') {
             let menuString = `&{template:desc} {{desc=`
-            + `<h4>Mass Combat Tools</h4><hr><b>Note:</b> All of these functions require selection of tokens to work.`
-            + `<br><br><h5>Battle Commands</h5>`
+            + `<h3>Mass Combat Tools</h3><hr><b>Note:</b> All of these functions require selection of tokens to work.`
+            + `<br><br><h4>Battle Commands</h4>`
             + `<br>[Damage](!mc -damage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount})`
             + `<br>[Scaled Damage](!mc -scaledDamage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount} ?{Scale})`
             + `<br>[Route Damage](!mc -routeDamage)`
             + `<br>[Disorganize](!mc -disorganize ?{Scale})`
             + `<br>[Recover](!mc -recover)`
-            + `<br><br><h5>Other Commands</h5>`
+            + `<br><br><h4>Other Commands</h4>`
             + `<br>[Long Rest](!mc -longrest ?{Sure you want to long rest|yes|no})`
             + `<br>[Upkeep](!mc -upkeep)`
             + `<br>[Battle Rating](!mc -battleRating)`
@@ -156,14 +166,18 @@ on('ready', () => {
 
                 // Load charsheet data
                 let char = getCharByAny(formationType);
+                let isNPC = getAttr(char, 'npc').get('current');
+                if (!isNPC) {
+                    heroList.push(new Hero(formName, hp, hpm));
+                    return;
+                }
                 let npcType = getAttr(char, 'npc_type').get('current');
                 let cr = parseInt(getAttr(char, 'npc_challenge').get('current'));
                 let xp = parseInt(getAttr(char, 'npc_xp').get('current'));
                 let traits = getAttrs(char, 'npctrait');
                 let formationTraitArray = traits.filter(trait => trait.get('current').includes('Formation of'));
                 if(formationTraitArray.length === 0) {
-                    log(`${formName} is not a formation.  Ignoring.`);
-                    sendChat(mcname, `${formName} is not a formation.  Ignoring.`);
+                    heroList.push(new Hero(formName, hp, hpm));
                     return;
                 }
                 let formDetails = formationTraitArray[0].get('current');
@@ -206,16 +220,16 @@ on('ready', () => {
                         sendChat(mcname, 'Invalid Damage Type.');
                         return;
                     }
-                    sendChat(mcname, `&{template:desc} {{desc=<h4>Damage Received</h4><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${amount} ${type}</b>}}`);
+                    sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${amount} ${type}</b>}}`);
                 } else if (key === '-routeDamage') {
                     let remHP = Math.max(0, hp-hpm*.1);
                     formToken.set('bar1_value', remHP);
                     formToken.set('bar3_value', cp + hpm*.1);
-                    sendChat(mcname, `&{template:desc} {{desc=<h4>Routed Drain</h4><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${hpm*.1}</b>}}`);
+                    sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${hpm*.1}</b>}}`);
                 } else if (key === '-recover') {
                     formToken.set('bar1_value', Math.min(hpm, hp+cp));
                     formToken.set('bar3_value', 0);
-                    sendChat(mcname, `&{template:desc} {{desc=<h4>Recovery</h4><hr>Benefactor: <b>${formDetails}</b><br>Regerated: <b>${cp}</b>}}`);
+                    sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>Benefactor: <b>${formDetails}</b><br>Regerated: <b>${cp}</b>}}`);
                 } else if (key === '-disorganize') {
                     if (tokens.length < 3) return;
                     let disorganizeScale = parseInt(tokens[2]);
@@ -241,7 +255,7 @@ on('ready', () => {
                     formToken.set('bar3_max', newMax);
                     formToken.set('aura1_radius', 0.7);
                     formToken.set('aura2_radius', 0.7);
-                    sendChat(mcname, `&{template:desc} {{desc=<h4>${formName} Long Rest</h4><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${1-reduxPerc})}}`);
+                    sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Long Rest</h3><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${1-reduxPerc})}}`);
                 } else if (key === '-upkeep') {
                     let upkeep = 0;
                     let buyPrice = 0;
@@ -277,7 +291,7 @@ on('ready', () => {
                     purchaseCost += buyPrice;
                     upkeepCost += upkeep;
                     if (msg.selected.length === 1) {
-                        sendChat(mcname, `&{template:desc} {{desc=<h4>${formType}${formName} Cost</h4><hr>${buyString}Upkeep: <b>${upkeep}gp</b><hr>(plus mounts and gear for ${protoCount} ${sourceCreature} if relevant)}}`);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>${formType}${formName} Cost</h3><hr>${buyString}Upkeep: <b>${upkeep}gp</b><hr>(plus mounts and gear for ${protoCount} ${sourceCreature} if relevant)}}`);
                         return;
                     }
                 } else if (key === '-battleRating') {
@@ -330,19 +344,27 @@ on('ready', () => {
         if (key === '-battleRating') {
             let totalExp = infExp + cavExp + arcExp + magExp + sctExp;
             totalExp = totalExp.toExponential(3);
-            sendChat(mcname, `&{template:desc} {{desc=`
-                + `<h4>Army Summary</h4>`
-                    + `<hr><h5>Battle Rating</h5>`
-                        + `<b>Total BR:</b> ${totalExp}`
-                    + `<hr><h5>Force Details</h5>`
-                        + (infCount > 0 ? `<br><b>Infantry:</b> ${infCount} formation` + (infCount > 1 ? 's' : '') + ` <p style="margin-left: 20px">${infTroops} infantrymen</p>` : '')
-                        + (cavCount > 0 ? `<br><b>Cavalry:</b> ${cavCount} formation` + (cavCount > 1 ? 's' : '') + ` <p style="margin-left: 20px">${cavTroops} cavalrymen</p>` : '')
-                        + (arcCount > 0 ? `<br><b>Archers:</b> ${arcCount} formation` + (arcCount > 1 ? 's' : '') + ` <p style="margin-left: 20px">${arcTroops} archers</p>` : '')
-                        + (magCount > 0 ? `<br><b>Mages:</b> ${magCount} formation` + (magCount > 1 ? 's' : '') + ` <p style="margin-left: 20px">${magTroops} mages</p>` : '')
-                        + (sctCount > 0 ? `<br><b>Scouts:</b> ${sctCount} formation` + (sctCount > 1 ? 's' : '') + ` <p style="margin-left: 20px">${sctTroops} scouts</p>` : '')
-                + `}}`);
+
+            let armyOverview = `&{template:desc} {{desc=`
+            + `<h3>Army Summary</h3>`
+                + `<hr><h4>Battle Rating</h4>`
+                    + `<b>Total BR:</b> ${totalExp}`
+                + (infCount + cavCount + arcCount + magCount + sctCount > 0 ? `<hr><h4>Force Details</h4>` : '')
+                    + (infCount > 0 ? `<br><b>Infantry:</b> ${infCount} formation` + (infCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${infTroops} infantrymen</p>` : '')
+                    + (cavCount > 0 ? `<br><b>Cavalry:</b> ${cavCount} formation` + (cavCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${cavTroops} cavalrymen</p>` : '')
+                    + (arcCount > 0 ? `<br><b>Archers:</b> ${arcCount} formation` + (arcCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${arcTroops} archers</p>` : '')
+                    + (magCount > 0 ? `<br><b>Mages:</b> ${magCount} formation` + (magCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${magTroops} mages</p>` : '')
+                    + (sctCount > 0 ? `<br><b>Scouts:</b> ${sctCount} formation` + (sctCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${sctTroops} scouts</p>` : '')
+                + (heroList.length > 0 ? `<hr><h4>Hero Details</h4>` : '');
+            heroList.forEach((hero) => {
+                armyOverview += `<p style="margin-left: 20px"><b>${hero.Name}</b>: ${hero.HP}/${hero.MHP}</p>`;
+            });
+            armyOverview += '}}';
+            sendChat(mcname, armyOverview);
         } else if (key === '-upkeep' && msg.selected.length !== 1) {
-            sendChat(mcname, `&{template:desc} {{desc=<h4>Army Cost</h4><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
+            sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
+        } else if (heroList.length > 0) {
+            sendChat(mcname, 'It looks like you selected one or more heroes but gave no valid input.  Did you forget to mark something as a formation?');
         }
     });
 
