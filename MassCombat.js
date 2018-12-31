@@ -257,16 +257,19 @@ on('ready', () => {
                     }
                     log('Damage Type: ' + type);
                     log('Damage Amount: ' + amount);
+                    let chaosBurn = hp-amount < 0 ? hp-amount : 0;
                     let remHP = Math.max(0, hp-amount);
                     log('Remaining HP: ' + remHP);
+                    log('Chaos Burn: ' + chaosBurn);
                     if (type === 'Battle') {
                         formToken.set('bar1_value', remHP);
-                        formToken.set('bar3_value', cp + amount / 2);
+                        formToken.set('bar3_value', Math.max(0, cp + amount / 2 + chaosBurn));
                     } else if (type === 'Chaos') {
                         formToken.set('bar1_value', remHP);
-                        formToken.set('bar3_value', cp + amount);
+                        formToken.set('bar3_value', Math.max(0, cp + amount + chaosBurn));
                     } else if (type === 'Casualty') {
                         formToken.set('bar1_value', remHP);
+                        formToken.set('bar3_value', Math.max(0, cp + chaosBurn));
                     } else {
                         sendChat(mcname, 'Invalid Damage Type.');
                         return;
@@ -306,7 +309,8 @@ on('ready', () => {
                     formToken.set('bar3_max', newMax);
                     formToken.set('aura1_radius', 0.7);
                     formToken.set('aura2_radius', 0.7);
-                    sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Long Rest</h3><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${1-reduxPerc})}}`);
+                    let reduxScalar = 1-reduxPerc;
+                    sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Long Rest</h3><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})}}`);
                 } else if (key === '-upkeep') {
                     let upkeep = 0;
                     let buyPrice = 0;
@@ -419,5 +423,5 @@ on('ready', () => {
         }
     });
 
-    log(`${mcname} v${v} online.`);
+    log(`-=> ${mcname} v${v} online. <=-`);
 });
