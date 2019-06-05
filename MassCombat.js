@@ -1,3 +1,4 @@
+if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 /* Mass Combat
 *
 * A companion script for Kyburn's Mass Combat rule set: 
@@ -9,7 +10,8 @@
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.3;
+    const v = 0.4;
+    const cache = {};
 
     // Initialize the state
     if (!state.MassCombat) {
@@ -59,14 +61,18 @@ on('ready', () => {
             }
         });
         if (!attr || attr.length === 0) {
-            log('No Attr');
+            log('No Attr: ' + char + ': ' + attrName);
             return null;
         }
         return attr;
     }
 
     const getAttr = (char, attrName) => {
-        return getAttrs(char, attrName)[0];
+        let attr = getAttrs(char, attrName);
+        if (!attr) {
+            return null;
+        }
+        return attr[0];
     }
 
     const getAttrsFromSub = (char, substringName) => {
@@ -79,7 +85,7 @@ on('ready', () => {
             }
         });
         if (!attr || attr.length === 0) {
-            log('No Attr');
+            log('No Substr Attr: ' + char + ': ' + attrName);
             return null;
         }
         return attr;
@@ -124,6 +130,28 @@ on('ready', () => {
             this.MHP = mhp;
         }
     }
+
+    const printBattleRating = (infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList) => {
+        let totalExp = infExp + cavExp + arcExp + magExp + sctExp;
+        totalExp = totalExp.toExponential(3);
+
+        let armyOverview = `&{template:desc} {{desc=`
+        + `<h3>Army Summary</h3>`
+            + `<hr><h4>Battle Rating</h4>`
+                + `<b>Total BR:</b> ${totalExp}`
+            + (infCount + cavCount + arcCount + magCount + sctCount > 0 ? `<hr><h4>Force Details</h4>` : '')
+                + (infCount > 0 ? `<br><b>Infantry:</b> ${infCount} formation` + (infCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${infTroops} infantrymen</p>` : '')
+                + (cavCount > 0 ? `<br><b>Cavalry:</b> ${cavCount} formation` + (cavCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${cavTroops} cavalrymen</p>` : '')
+                + (arcCount > 0 ? `<br><b>Archers:</b> ${arcCount} formation` + (arcCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${arcTroops} archers</p>` : '')
+                + (magCount > 0 ? `<br><b>Mages:</b> ${magCount} formation` + (magCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${magTroops} mages</p>` : '')
+                + (sctCount > 0 ? `<br><b>Scouts:</b> ${sctCount} formation` + (sctCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${sctTroops} scouts</p>` : '')
+            + (heroList.length > 0 ? `<hr><h4>Hero Details</h4>` : '');
+        heroList.forEach((hero) => {
+            armyOverview += `<p style="margin-left: 20px"><b>${hero.Name}</b>: ${hero.HP}/${hero.MHP}</p>`;
+        });
+        armyOverview += '}}';
+        sendChat(mcname, armyOverview);
+    };
 
     on('chat:message', (msg) => {
         if (msg.type !== 'api') return;
@@ -201,227 +229,277 @@ on('ready', () => {
 
         // Iterate through selected tokens
         if (!msg.selected) return;
-        msg.selected.forEach((selection) => {
-            try {
-                // Load token data
-                let formToken = getObj('graphic', selection._id);
-                let idTag = ` --ids ${formToken._id}`;
-                let formName = formToken.get('name');
-                let formationType = formToken.get('represents');
-                let hp = parseInt(formToken.get('bar1_value'));
-                let hpm = parseInt(formToken.get('bar1_max'));
-                let cp = parseInt(formToken.get('bar3_value'));
-                log(`Operation ${key} on ${formName} with ${hp}/${hpm} hp and ${cp} cp.`);
+        let processed = 0;
 
-                // Load charsheet data
-                let char = getCharByAny(formationType);
-                let isNPC = getAttr(char, 'npc').get('current');
-                if (isNPC != 1) {
-                    log(`Selected ${formName} is not an NPC`);
-                    heroList.push(new Hero(formName, hp, hpm));
-                    return;
-                }
-                let npcType = getAttr(char, 'npc_type').get('current');
-                let cr = parseInt(getAttr(char, 'npc_challenge').get('current'));
-                let xp = parseInt(getAttr(char, 'npc_xp').get('current'));
-                let traits = getAttrsFromSub(char, 'npctrait');
-                let formationTraitArray = traits.filter(trait => trait.get('current').includes('Formation of'));
-                if(formationTraitArray.length === 0) {
-                    log(`Selected ${formName} has no formation trait`);
-                    heroList.push(new Hero(formName, hp, hpm));
-                    return;
-                }
-                let formDetails = formationTraitArray[0].get('current');
-                log('Form Details: ' + formDetails);
-                let formTokens = formDetails.split(' ');
-                let formType = formTokens[0];
-                let protoCount = parseInt(formTokens[3]);
-                let recruitSource = formTokens[4];
-                let sourceCreature = formTokens[4];
-                if (formTokens.length > 5) {
-                    let sourceCreatureIndex = formDetails.indexOf(formTokens[5]);
-                    log('Source Index: ' + sourceCreatureIndex);
-                    sourceCreature = formDetails.substr(sourceCreatureIndex);
-                }
-
-                log(`${npcType} NPC of ${protoCount} CR ${cr} ${sourceCreature} recruited via ${recruitSource}`);
-
-                if (key === '-damage' || key === '-scaledDamage') {
-                    if (tokens.length < 4) return;
-                    let type = tokens[2];
-                    let amount = parseInt(tokens[3]);
-                    if (key === '-scaledDamage') {
-                        if (tokens.length < 5) return;
-                        let damageScale = parseInt(tokens[4]);
-                        amount *= damageScale;
-                    }
-                    log('Damage Type: ' + type);
-                    log('Damage Amount: ' + amount);
-                    let chaosBurn = hp-amount < 0 ? hp-amount : 0;
-                    let remHP = Math.max(0, hp-amount);
-                    log('Remaining HP: ' + remHP);
-                    log('Chaos Burn: ' + chaosBurn);
-                    if (type === 'Battle') {
-                        formToken.set('bar1_value', remHP);
-                        formToken.set('bar3_value', Math.max(0, cp + amount / 2 + chaosBurn));
-                    } else if (type === 'Chaos') {
-                        formToken.set('bar1_value', remHP);
-                        formToken.set('bar3_value', Math.max(0, cp + amount + chaosBurn));
-                    } else if (type === 'Casualty') {
-                        formToken.set('bar1_value', remHP);
-                        formToken.set('bar3_value', Math.max(0, cp + chaosBurn));
-                    } else {
-                        sendChat(mcname, 'Invalid Damage Type.');
-                        return;
-                    }
-                    sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${amount} ${type}</b>}}`);
-                } else if (key === '-routeDamage') {
-                    let remHP = Math.max(0, hp-hpm*.1);
-                    formToken.set('bar1_value', remHP);
-                    formToken.set('bar3_value', cp + hpm*.1);
-                    sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${hpm*.1}</b>}}`);
-                } else if (key === '-recover') {
-                    formToken.set('bar1_value', Math.min(hpm, hp+cp));
-                    formToken.set('bar3_value', 0);
-                    sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>Benefactor: <b>${formDetails}</b><br>Regerated: <b>${cp}</b>}}`);
-                } else if (key === '-disorganize') {
-                    if (tokens.length < 3) return;
-                    let disorganizeScale = parseInt(tokens[2]);
-                    sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Disorganized</h3><hr>${formName} has been Disorganized.  If this formation is attacked by another, select this token and pop this damage.<br>[Pop Disorganized](!mc -popDisorganize ${disorganizeScale} ?{Are you sure|yes|no})}}`);
-                } else if (key === '-popDisorganize') {
-                    if (tokens.length < 4) return;
-                    if (tokens[3] !== 'yes') return;
-                    let popScale = parseInt(tokens[2]);
-                    let amount = hpm * 0.05 * popScale;
-                    log(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
-                    let remHP = Math.max(0, hp-amount);
-                    formToken.set('bar1_value', remHP);
-                } else if (key === '-longrest') {
-                    if (tokens.length < 3) return;
-                    if (tokens[2] !== 'yes') return;
-                    let postRecovery = hp+cp;
-                    let newMax = (hpm-postRecovery)/2 + postRecovery;
-                    let reduxPerc = 1 - newMax/hpm;
-                    reduxPerc = +reduxPerc.toFixed(2);
-                    formToken.set('bar1_value', newMax);
-                    formToken.set('bar1_max', newMax);
-                    formToken.set('bar3_value', 0);
-                    formToken.set('bar3_max', newMax);
-                    formToken.set('aura1_radius', 0.7);
-                    formToken.set('aura2_radius', 0.7);
-                    let reduxScalar = 1-reduxPerc;
-                    sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Long Rest</h3><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})}}`);
-                } else if (key === '-upkeep') {
-                    let upkeep = 0;
-                    let buyPrice = 0;
-                    let buyString = '0';
-                    let formType = '';
-                    if (npcType.toLowerCase().includes('undead')) {
-                        upkeep = cr * protoCount * 0.1;
-                        buyPrice = cr * protoCount * 20;
-                        buyString = `Creation: <b>${buyPrice}gp</b><br>`;
-                    } else if (npcType.toLowerCase().includes('construct')) {
-                        upkeep = cr * protoCount * 0.2;
-                        buyPrice = cr * protoCount * 50;
-                        buyString = `Creation: <b>${buyPrice}gp</b><br>`;
-                    } else if (npcType.toLowerCase().includes('plant')) {
-                        upkeep = cr * protoCount * 0.2;
-                        buyPrice = cr * protoCount;
-                        buyString = `Creation: <b>${buyPrice}gp</b><br>`;
-                    } else {
-                        let sizeMod = sizeCostArray[getCreatureSize(npcType)];
-                        let recruitMod = 1;
-                        buyString = '';
-                        formType = 'Mercenary ';
-                        buyPrice = cr * protoCount;
-                        if (recruitSource === 'Levied') {
-                            recruitMod = 0.5;
-                            buyString = `Procurement: <b>${buyPrice}gp</b><br>`;
-                            formType = 'Levied ';
-                        }
-                        log(`Size Mod: ${sizeMod}  CR: ${cr}  Count: ${protoCount}  Recruit Mod: ${recruitMod}`);
-                        upkeep = (sizeMod + cr) * protoCount * recruitMod;
-                    }
-                    upkeep = +upkeep.toFixed(2);
-                    purchaseCost += buyPrice;
-                    upkeepCost += upkeep;
-                    if (msg.selected.length === 1) {
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>${formType}${formName} Cost</h3><hr>${buyString}Upkeep: <b>${upkeep}gp</b><hr>(plus mounts and gear for ${protoCount} ${sourceCreature} if relevant)}}`);
-                        return;
-                    }
-                } else if (key === '-battleRating') {
-                    log('Calc Battle Rating');
-                    switch (formType.toLowerCase()) {
-                        case 'infantry':
-                            infExp += protoCount * xp;
-                            infCount++;
-                            infTroops += protoCount;
-                            break;
-                        case 'cavalry':
-                            cavExp += protoCount * xp;
-                            cavCount++;
-                            cavTroops += protoCount;
-                            break;
-                        case 'archers':
-                        case 'archer':
-                            arcExp += protoCount * xp;
-                            arcCount++;
-                            arcTroops += protoCount;
-                            break;
-                        case 'mage':
-                        case 'mages':
-                            magExp += protoCount * xp;
-                            magCount++;
-                            magTroops += protoCount;
-                            break;
-                        case 'scout':
-                        case 'scouts':
-                            sctExp += protoCount * xp;
-                            sctCount++;
-                            sctTroops += protoCount;
-                            break;
-                        default:
-                            log('Invalid Formation Type: ' + formType);
-                            sendChat(mcname, 'Invalid Formation Type: ' + formDetails);
-                            return;
-                    }
-                } else {
-                    log('Unrecognized Input');
-                    sendChat(mcname, 'Unrecognized input.');
-                }
-            } catch (exception) {
-                log('Exception caught by Mass Combat: ' + exception);
-                sendChat(mcname, 'WARNING: Mass Combat Internal Error.  Contact script author and provide API output console.');
+        // Wait Duration Warning Messages
+        let wait = 0;
+        if (msg.selected.length > 0) {
+            if (key === '-battleRating'){
+                sendChat(mcname, 'Calculating Battle Rating.  This may take a few moments...');
+                wait = 100;
+            } else if (key === '-upkeep'){
+                sendChat(mcname, 'Calculating Upkeep.  This may take a few moments...');
+                wait = 100;
             }
-        });
-
-        // Perform any overall operations after all tokens have been processed
-        if (key === '-battleRating') {
-            let totalExp = infExp + cavExp + arcExp + magExp + sctExp;
-            totalExp = totalExp.toExponential(3);
-
-            let armyOverview = `&{template:desc} {{desc=`
-            + `<h3>Army Summary</h3>`
-                + `<hr><h4>Battle Rating</h4>`
-                    + `<b>Total BR:</b> ${totalExp}`
-                + (infCount + cavCount + arcCount + magCount + sctCount > 0 ? `<hr><h4>Force Details</h4>` : '')
-                    + (infCount > 0 ? `<br><b>Infantry:</b> ${infCount} formation` + (infCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${infTroops} infantrymen</p>` : '')
-                    + (cavCount > 0 ? `<br><b>Cavalry:</b> ${cavCount} formation` + (cavCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${cavTroops} cavalrymen</p>` : '')
-                    + (arcCount > 0 ? `<br><b>Archers:</b> ${arcCount} formation` + (arcCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${arcTroops} archers</p>` : '')
-                    + (magCount > 0 ? `<br><b>Mages:</b> ${magCount} formation` + (magCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${magTroops} mages</p>` : '')
-                    + (sctCount > 0 ? `<br><b>Scouts:</b> ${sctCount} formation` + (sctCount > 1 ? 's' : '') + `<p style="margin-left: 20px">${sctTroops} scouts</p>` : '')
-                + (heroList.length > 0 ? `<hr><h4>Hero Details</h4>` : '');
-            heroList.forEach((hero) => {
-                armyOverview += `<p style="margin-left: 20px"><b>${hero.Name}</b>: ${hero.HP}/${hero.MHP}</p>`;
-            });
-            armyOverview += '}}';
-            sendChat(mcname, armyOverview);
-        } else if (key === '-upkeep' && msg.selected.length !== 1) {
-            sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
-        } else if (heroList.length > 0) {
-            sendChat(mcname, 'It looks like you selected one or more heroes but gave no valid input.  Did you forget to mark something as a formation?');
         }
+        setTimeout(() => {
+            msg.selected.forEach((selection) => {
+                _.defer(() => {
+                    processed++;
+                    
+                    // Load token data.  Unfortunately, we can't use the cache for this because you could have mook tokens with different hp bars
+                    let formToken = getObj('graphic', selection._id);
+                    let formationType = formToken.get('represents');
+                    let formName = formToken.get('name');
+                    let hp = parseInt(formToken.get('bar1_value'));
+                    let hpm = parseInt(formToken.get('bar1_max'));
+                    let cp = parseInt(formToken.get('bar3_value'));
+                    log(`Operation ${key} on ${formName} with ${hp}/${hpm} hp and ${cp} cp.`);
+    
+                    // Load charsheet data.  Use a cache for this
+                    let cacheEntry = cache[formationType];
+                    if (!cacheEntry) {
+                        buildNewEntry = true;
+                        let char = getCharByAny(formationType);
+
+                        // Discount accidental selections of unowned tokens or graphics
+                        if (!char) {
+                            return;
+                        }
+
+                        // Filter NPCs vs PCs
+                        const npcAttr = getAttr(char, 'npc');
+                        let isNPC = false;
+                        if (npcAttr && (isNPC = npcAttr.get('current'))) {
+                            let traits = getAttrsFromSub(char, 'npctrait');
+
+                            // Discount non-formation NPCs
+                            if (!traits) {
+                                heroList.push(new Hero(formName, hp, hpm));
+                                return;
+                            }
+
+                            // Get formation values
+                            let formationTraitArray = traits.filter(trait => trait.get('current').includes('Formation of'));
+                            if(formationTraitArray.length === 0) {
+                                cacheEntry = {
+                                    char: char,
+                                    isNPC: isNPC,
+                                    isHero: true,
+                                    npcType: getAttr(char, 'npc_type').get('current'),
+                                    cr: parseInt(getAttr(char, 'npc_challenge').get('current')),
+                                    xp: parseInt(getAttr(char, 'npc_xp').get('current')),
+                                    traits: traits,
+                                    formationTraitArray: formationTraitArray
+                                };
+                            } else {
+                                let formDetails = formationTraitArray[0].get('current');
+                                cacheEntry = {
+                                    char: char,
+                                    isNPC: isNPC,
+                                    isHero: false,
+                                    npcType: getAttr(char, 'npc_type').get('current'),
+                                    cr: parseInt(getAttr(char, 'npc_challenge').get('current')),
+                                    xp: parseInt(getAttr(char, 'npc_xp').get('current')),
+                                    traits: traits,
+                                    formationTraitArray: formationTraitArray,
+                                    formDetails: formDetails
+                                };
+                            }
+                        } else {
+                            cacheEntry = {
+                                char: char,
+                                isNPC: isNPC,
+                                isHero: true
+                            };
+                        }
+                        cache[formationType] = cacheEntry;
+                    }
+                    if (cacheEntry.isHero) {
+                        log(`Selected ${formName} is not an NPC`);
+                        heroList.push(new Hero(formName, hp, hpm));
+                        if (processed === msg.selected.length) {
+                            if (key === '-battleRating') {
+                                printBattleRating(infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList);
+                            } else if (key === '-upkeep') {
+                                sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
+                            }
+                        }
+                        return;
+                    }
+                    let npcType = cacheEntry.npcType;
+                    let cr = cacheEntry.cr;
+                    let xp = cacheEntry.xp;
+                    let formDetails = cacheEntry.formDetails;
+                    let formTokens = formDetails.split(' ');
+                    let formType = formTokens[0];
+                    let protoCount = parseInt(formTokens[3]);
+                    let recruitSource = formTokens[4];
+                    let sourceCreature = formTokens[4];
+                    if (formTokens.length > 5) {
+                        let sourceCreatureIndex = formDetails.indexOf(formTokens[5]);
+                        log('Source Index: ' + sourceCreatureIndex);
+                        sourceCreature = formDetails.substr(sourceCreatureIndex);
+                    }
+    
+                    log(`${npcType} NPC of ${protoCount} CR ${cr} ${sourceCreature} recruited via ${recruitSource}`);
+    
+                    if (key === '-damage' || key === '-scaledDamage') {
+                        if (tokens.length < 4) return;
+                        let type = tokens[2];
+                        let amount = parseInt(tokens[3]);
+                        if (key === '-scaledDamage') {
+                            if (tokens.length < 5) return;
+                            let damageScale = parseInt(tokens[4]);
+                            amount *= damageScale;
+                        }
+                        log('Damage Type: ' + type);
+                        log('Damage Amount: ' + amount);
+                        let chaosBurn = hp-amount < 0 ? hp-amount : 0;
+                        let remHP = Math.max(0, hp-amount);
+                        log('Remaining HP: ' + remHP);
+                        log('Chaos Burn: ' + chaosBurn);
+                        if (type === 'Battle') {
+                            formToken.set('bar1_value', remHP);
+                            formToken.set('bar3_value', Math.max(0, cp + amount / 2 + chaosBurn));
+                        } else if (type === 'Chaos') {
+                            formToken.set('bar1_value', remHP);
+                            formToken.set('bar3_value', Math.max(0, cp + amount + chaosBurn));
+                        } else if (type === 'Casualty') {
+                            formToken.set('bar1_value', remHP);
+                            formToken.set('bar3_value', Math.max(0, cp + chaosBurn));
+                        } else {
+                            sendChat(mcname, 'Invalid Damage Type.');
+                            return;
+                        }
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${amount} ${type}</b>}}`);
+                    } else if (key === '-routeDamage') {
+                        let remHP = Math.max(0, hp-hpm*.1);
+                        formToken.set('bar1_value', remHP);
+                        formToken.set('bar3_value', cp + hpm*.1);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${hpm*.1}</b>}}`);
+                    } else if (key === '-recover') {
+                        formToken.set('bar1_value', Math.min(hpm, hp+cp));
+                        formToken.set('bar3_value', 0);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>Benefactor: <b>${formDetails}</b><br>Regerated: <b>${cp}</b>}}`);
+                    } else if (key === '-disorganize') {
+                        if (tokens.length < 3) return;
+                        let disorganizeScale = parseInt(tokens[2]);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Disorganized</h3><hr>${formName} has been Disorganized.  If this formation is attacked by another, select this token and pop this damage.<br>[Pop Disorganized](!mc -popDisorganize ${disorganizeScale} ?{Are you sure|yes|no})}}`);
+                    } else if (key === '-popDisorganize') {
+                        if (tokens.length < 4) return;
+                        if (tokens[3] !== 'yes') return;
+                        let popScale = parseInt(tokens[2]);
+                        let amount = hpm * 0.05 * popScale;
+                        log(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
+                        let remHP = Math.max(0, hp-amount);
+                        formToken.set('bar1_value', remHP);
+                    } else if (key === '-longrest') {
+                        if (tokens.length < 3) return;
+                        if (tokens[2] !== 'yes') return;
+                        let postRecovery = hp+cp;
+                        let newMax = (hpm-postRecovery)/2 + postRecovery;
+                        let reduxPerc = 1 - newMax/hpm;
+                        reduxPerc = +reduxPerc.toFixed(2);
+                        formToken.set('bar1_value', newMax);
+                        formToken.set('bar1_max', newMax);
+                        formToken.set('bar3_value', 0);
+                        formToken.set('bar3_max', newMax);
+                        formToken.set('aura1_radius', 0.7);
+                        formToken.set('aura2_radius', 0.7);
+                        let reduxScalar = 1-reduxPerc;
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Long Rest</h3><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})}}`);
+                    } else if (key === '-upkeep') {
+                        let upkeep = 0;
+                        let buyPrice = 0;
+                        let buyString = '0';
+                        let formType = '';
+                        if (npcType.toLowerCase().includes('undead')) {
+                            upkeep = cr * protoCount * 0.1;
+                            buyPrice = cr * protoCount * 20;
+                            buyString = `Creation: <b>${buyPrice}gp</b><br>`;
+                        } else if (npcType.toLowerCase().includes('construct')) {
+                            upkeep = cr * protoCount * 0.2;
+                            buyPrice = cr * protoCount * 50;
+                            buyString = `Creation: <b>${buyPrice}gp</b><br>`;
+                        } else if (npcType.toLowerCase().includes('plant')) {
+                            upkeep = cr * protoCount * 0.2;
+                            buyPrice = cr * protoCount;
+                            buyString = `Creation: <b>${buyPrice}gp</b><br>`;
+                        } else {
+                            let sizeMod = sizeCostArray[getCreatureSize(npcType)];
+                            let recruitMod = 1;
+                            buyString = '';
+                            formType = 'Mercenary ';
+                            buyPrice = cr * protoCount;
+                            if (recruitSource === 'Levied') {
+                                recruitMod = 0.5;
+                                buyString = `Procurement: <b>${buyPrice}gp</b><br>`;
+                                formType = 'Levied ';
+                            }
+                            log(`Size Mod: ${sizeMod}  CR: ${cr}  Count: ${protoCount}  Recruit Mod: ${recruitMod}`);
+                            upkeep = (sizeMod + cr) * protoCount * recruitMod;
+                        }
+                        upkeep = +upkeep.toFixed(2);
+                        purchaseCost += buyPrice;
+                        upkeepCost += upkeep;
+                        if (msg.selected.length === 1) {
+                            sendChat(mcname, `&{template:desc} {{desc=<h3>${formType}${formName} Cost</h3><hr>${buyString}Upkeep: <b>${upkeep}gp</b><hr>(plus mounts and gear for ${protoCount} ${sourceCreature} if relevant)}}`);
+                            return;
+                        }
+                        if (processed === msg.selected.length) {
+                            sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
+                        }
+                    } else if (key === '-battleRating') {
+                        log('Calc Battle Rating');
+                        switch (formType.toLowerCase()) {
+                            case 'infantry':
+                                infExp += protoCount * xp;
+                                infCount++;
+                                infTroops += protoCount;
+                                break;
+                            case 'cavalry':
+                                cavExp += protoCount * xp;
+                                cavCount++;
+                                cavTroops += protoCount;
+                                break;
+                            case 'archers':
+                            case 'archer':
+                                arcExp += protoCount * xp;
+                                arcCount++;
+                                arcTroops += protoCount;
+                                break;
+                            case 'mage':
+                            case 'mages':
+                                magExp += protoCount * xp;
+                                magCount++;
+                                magTroops += protoCount;
+                                break;
+                            case 'scout':
+                            case 'scouts':
+                                sctExp += protoCount * xp;
+                                sctCount++;
+                                sctTroops += protoCount;
+                                break;
+                            default:
+                                log('Invalid Formation Type: ' + formType);
+                                sendChat(mcname, 'Invalid Formation Type: ' + formDetails);
+                                return;
+                        }
+                        if (processed === msg.selected.length) {
+                            _.defer(() => {
+                                printBattleRating(infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList);
+                            });
+                        }
+                    } else {
+                        log('Unrecognized Input');
+                        sendChat(mcname, 'Unrecognized input.');
+                    }
+                });
+            });
+        }, wait);
     });
 
     log(`-=> ${mcname} v${v} online. <=-`);
 });
+if (typeof MarkStop != 'undefined') {MarkStop('MassCombat');}
