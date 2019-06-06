@@ -10,7 +10,7 @@ if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.4;
+    const v = 0.5;
     const cache = {};
 
     // Initialize the state
@@ -131,6 +131,113 @@ on('ready', () => {
         }
     }
 
+    class Status {
+        constructor(type, value) {
+            this.Type = type;
+            this.Value = value;
+        }
+    }
+
+    const GetStatuses = (token) => {
+        const rawStatus = token.get('statusmarkers');
+        const oldStatusArray = rawStatus.split(',');
+        const newStatusArray = [];
+        let previousType = false;
+        let prevStatus = null;
+        oldStatusArray.forEach((entry) => {
+            const statusFields = entry.split('@');
+            const type = statusFields[0];
+            const value = statusFields.length > 1
+                ? statusFields[1]
+                : true;
+            let newStatus = null;
+            // If we've already gotten one of this kind, we're seeing a duplicate, so add to previous
+            if (type === previousType) {
+                newStatus = prevStatus;
+                prevStatus.Value = prevStatus.Value + value;
+            } else {
+                newStatus = new Status(type, value);
+                newStatusArray.push(newStatus);
+            }
+            previousType = type;
+            prevStatus = newStatus;
+        });
+        return newStatusArray;
+    };
+
+    const GetStatusValue = (token, type) => {
+        const statuses = GetStatuses(token);
+        for(let i = 0; i < statuses.length; i++) {
+            const curStatus = statuses[i];
+            if (type === curStatus.Type) {
+                const intVal = parseInt(curStatus.Value);
+                if (isNaN(intVal)) {
+                    return curStatus.Value;
+                } else {
+                    return intVal;
+                }
+            }
+        }
+        return false;
+    };
+
+    const StringifyStatus = (status) => {
+        if (status.Value === true) {
+            return status.Type;
+        } else {
+            const strVal = status.Value + "";
+            const digitArray = strVal.split('');
+            const valArray = [];
+            for (let i = 0; i < digitArray.length; i++) {
+                let char = digitArray[i];
+                valArray.push(status.Type + '@' + char);
+            }
+            return valArray.join(',');
+        }
+    };
+
+    const UpdateStatusValue = (token, type, value) => {
+        let alreadyExists = false;
+        const statuses = GetStatuses(token);
+        for(let i = 0; i < statuses.length; i++) {
+            const curStatus = statuses[i];
+            if (type === curStatus.Type) {
+                curStatus.Value = value;
+                alreadyExists = true;
+                break;
+            }
+        }
+        if (!alreadyExists) {
+            statuses.push(new Status(type, value));
+        }
+        const statusStrings = [];
+        for (let i = 0; i < statuses.length; i++) {
+            const curStatus = statuses[i];
+            statusStrings.push(StringifyStatus(curStatus));
+        }
+        const statusString = statusStrings.join(',');
+        token.set('statusmarkers', statusString);
+        return value;
+    };
+
+    const StatusIcons = {
+        Routed: "status_chained-heart",
+        Guard: "status_sentry-gun",
+        Defend: "status_bolt-shield",
+        Disorganized: "status_rolling-bomb",
+        Dead: "status_dead"
+    };
+
+    const StripStatus = (icon) => {
+        const prefix = "status_";
+        return icon.substr(prefix.length);
+    }
+
+    const LeftAlignDiv = {
+        Open: `<div align="left" style="margin-left: 7px;margin-right: 7px">`,
+        Close: '</div>'
+    };
+
     const printBattleRating = (infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList) => {
         let totalExp = infExp + cavExp + arcExp + magExp + sctExp;
         totalExp = totalExp.toExponential(3);
@@ -189,20 +296,29 @@ on('ready', () => {
         // Perform operations without needed selection
         if (key === '-overview' || key === '-o' || key === '-help') {
             let menuString = `&{template:desc} {{desc=`
-            + `<h3>Mass Combat Tools</h3><hr><b>Note:</b> All of these functions require selection of tokens to work.`
-            + `<br><br><h4>Battle Commands</h4>`
+            + LeftAlignDiv.Open
+            + `<h3>Mass Combat Tools</h3><hr>`
+            + `<h4>Battle Commands</h4>`
+            + `<b>Note:</b> All of these functions require selection of tokens to work.`
                 + `<br>[Damage](!mc -damage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount})`
                 + `<br>[Scaled Damage](!mc -scaledDamage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount} ?{Scale})`
-                + `<br>[Route Damage](!mc -routeDamage)`
-                + `<br>[Disorganize](!mc -disorganize ?{Scale})`
+                + `<br>[Disorganize](!mc -disorganize ?{Please type the new disorganization scale.  Type 'false' to remove existing disorganization})`
+                + `<br>[Pop Disorganize](!mc -popDisorganize ?{Are you sure you wish to pop disorganization|yes|no})`
                 + `<br>[Recover](!mc -recover)`
+                + `<br>[Heal](!mc -heal ?{Points of healing})`
+                + `<br>[Guard](!mc -guard)`
+                + `<br>[Defend](!mc -defend)`
+                + `<br>[Route](!mc -route ?{Route Degree|Not Routed,-1|0 Failures,0|1 Failure,1|2 Failures,2|3 Failures,3})`
+                + `<br>[Route Damage](!mc -routeDamage)`
             + `<br><br><h4>Initiative Commands</h4>`
                 + `<br>[Save Initiative](!mc -saveInitiative)`
                 + `<br>[Load Initiative](!mc -loadInitiative)`
             + `<br><br><h4>Other Commands</h4>`
+            + `<b>Note:</b> All of these functions require selection of tokens to work.`
                 + `<br>[Long Rest](!mc -longrest ?{Sure you want to long rest|yes|no})`
                 + `<br>[Upkeep](!mc -upkeep)`
                 + `<br>[Battle Rating](!mc -battleRating)`
+            + LeftAlignDiv.Close
             + `}}`;
             sendChat(mcname, menuString);
             return;
@@ -372,28 +488,38 @@ on('ready', () => {
                             sendChat(mcname, 'Invalid Damage Type.');
                             return;
                         }
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${amount} ${type}</b>}}`);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} ${type}${LeftAlignDiv.Close}}}`);
                     } else if (key === '-routeDamage') {
                         let remHP = Math.max(0, hp-hpm*.1);
                         formToken.set('bar1_value', remHP);
                         formToken.set('bar3_value', cp + hpm*.1);
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr>Victim: <b>${formDetails}</b><br>Damage: <b>${hpm*.1}</b>}}`);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${hpm*.1}${LeftAlignDiv.Close}}}`);
                     } else if (key === '-recover') {
                         formToken.set('bar1_value', Math.min(hpm, hp+cp));
                         formToken.set('bar3_value', 0);
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>Benefactor: <b>${formDetails}</b><br>Regerated: <b>${cp}</b>}}`);
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>${LeftAlignDiv.Open}<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}${LeftAlignDiv.Close}}}`);
                     } else if (key === '-disorganize') {
                         if (tokens.length < 3) return;
                         let disorganizeScale = parseInt(tokens[2]);
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Disorganized</h3><hr>${formName} has been Disorganized.  If this formation is attacked by another, select this token and pop this damage.<br>[Pop Disorganized](!mc -popDisorganize ${disorganizeScale} ?{Are you sure|yes|no})}}`);
+                        formToken.set(StatusIcons.Disorganized, "" + disorganizeScale);
+                        let type = StripStatus(StatusIcons.Disorganized);
+                        UpdateStatusValue(formToken, type, disorganizeScale);
                     } else if (key === '-popDisorganize') {
-                        if (tokens.length < 4) return;
-                        if (tokens[3] !== 'yes') return;
-                        let popScale = parseInt(tokens[2]);
-                        let amount = hpm * 0.05 * popScale;
-                        log(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
-                        let remHP = Math.max(0, hp-amount);
-                        formToken.set('bar1_value', remHP);
+                        if (tokens.length < 3) return;
+                        if (tokens[2] !== 'yes') return;
+                        let type = StripStatus(StatusIcons.Disorganized);
+                        const popScale = GetStatusValue(formToken, type);
+                        log('Disorganization Scale of Token: ' + popScale);
+                        if (popScale !== true) {
+                            let amount = hpm * 0.05 * popScale;
+                            log(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
+                            let remHP = Math.max(0, hp-amount);
+                            formToken.set('bar1_value', remHP);
+                            formToken.set(StatusIcons.Disorganized, false);
+                            sendChat(mcname, `&{template:desc} {{desc=<h3>Disorganization Popped</h3><hr>${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} casualty${LeftAlignDiv.Close}}}`);
+                        } else {
+                            sendChat(mcname, 'That token was not marked as disorganized!  Unable to pop.');
+                        }
                     } else if (key === '-longrest') {
                         if (tokens.length < 3) return;
                         if (tokens[2] !== 'yes') return;
@@ -491,6 +617,42 @@ on('ready', () => {
                                 printBattleRating(infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList);
                             });
                         }
+                    } else if (key === '-defend') {
+                        const isDefending = formToken.get(StatusIcons.Defend);
+                        log('Defending Value: ' + isDefending);
+                        formToken.set(StatusIcons.Defend, !isDefending);
+                    } else if (key === '-guard') {
+                        const isGuarding = formToken.get(StatusIcons.Guard);
+                        log('Guarding Value: ' + isGuarding);
+                        formToken.set(StatusIcons.Guard, !isGuarding);
+                    } else if (key === '-route') {
+                        formToken.set(StatusIcons.Guard, false);
+                        formToken.set(StatusIcons.Defend, false);
+                        if (tokens.length < 3) return;
+                        let newRouteValue = parseInt(tokens[2]);
+                        if (newRouteValue === -1) {
+                            formToken.set(StatusIcons.Routed, false);
+                        } else if (newRouteValue === 0) {
+                            formToken.set(StatusIcons.Routed, true);
+                        } else if (newRouteValue === 1) {
+                            formToken.set(StatusIcons.Routed, "1");
+                        } else if (newRouteValue === 2) {
+                            formToken.set(StatusIcons.Routed, "2");
+                        } else {
+                            formToken.set(StatusIcons.Routed, false);
+                            formToken.set(StatusIcons.Dead, true);
+                        }
+                    } else if (key === '-heal') {
+                        if (tokens.length < 3) return;
+                        let healVal = parseInt(tokens[2]);
+                        let missingVitality = hpm - cp - hp;
+                        let realHeal = Math.min(healVal, missingVitality);
+                        log(`Attempting Heal of ${healVal}, which was reduced to ${realHeal}`);
+                        formToken.set('bar1_value', hp + realHeal);
+                        const capString = realHeal < healVal
+                            ? `, capped at <b>${realHeal}`
+                            : ``;
+                        sendChat(mcname, `&{template:desc} {{desc=<h3>Healing Received</h3><hr>${LeftAlignDiv.Open}<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}${LeftAlignDiv.Close}}}`);
                     } else {
                         log('Unrecognized Input');
                         sendChat(mcname, 'Unrecognized input.');
