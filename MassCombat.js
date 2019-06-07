@@ -10,15 +10,23 @@ if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.5;
+    const v = 0.6;
     const cache = {};
+    let debugLog = false;
+
+    // Debug Log
+    const dlog = (str) => {
+        if (debugLog) {
+            log(str);
+        }
+    };
 
     // Initialize the state
     if (!state.MassCombat) {
         state.MassCombat = {
             SavedInitiative: []
         };
-    }
+    } 
 
     const getCharByAny = (nameOrId) => {
         let character = null;
@@ -56,12 +64,11 @@ on('ready', () => {
             if (obj.get('type') === 'attribute'
                 && obj.get('characterid') === char.id
                 && obj.get('name') == attrName) {
-                    //log('Valid Obj: ' + JSON.stringify(obj));
                     return obj;
             }
         });
         if (!attr || attr.length === 0) {
-            log('No Attr: ' + char + ': ' + attrName);
+            dlog('No Attr: ' + char + ': ' + attrName);
             return null;
         }
         return attr;
@@ -80,12 +87,11 @@ on('ready', () => {
             if (obj.get('type') === 'attribute'
                 && obj.get('characterid') === char.id
                 && obj.get('name').indexOf(substringName) !== -1) {
-                    //log('Valid Obj: ' + JSON.stringify(obj));
                     return obj;
             }
         });
         if (!attr || attr.length === 0) {
-            log('No Substr Attr: ' + char + ': ' + attrName);
+            dlog('No Substr Attr: ' + char + ': ' + attrName);
             return null;
         }
         return attr;
@@ -225,6 +231,7 @@ on('ready', () => {
         Guard: "status_sentry-gun",
         Defend: "status_bolt-shield",
         Disorganized: "status_rolling-bomb",
+        Recovering: "status_half-heart",
         Dead: "status_dead"
     };
 
@@ -237,6 +244,20 @@ on('ready', () => {
         Open: `<div align="left" style="margin-left: 7px;margin-right: 7px">`,
         Close: '</div>'
     };
+
+    const brTag = '<br>';
+
+    const HTag = (str, tier, startLine = false, stopLine = false) => {
+        let startTag = startLine ? brTag : '';
+        let stopTag = stopLine ? brTag : '';
+        return startTag + '<h' + tier + '>' + str + '</h' + tier + '>' + stopTag;
+    }
+
+    const Bold = (str, startLine = false, stopLine = false) => {
+        let startTag = startLine ? brTag : '';
+        let stopTag = stopLine ? brTag : '';
+        return startTag + '<b>' + str + '</b>' + stopTag;
+    }
 
     const printBattleRating = (infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList) => {
         let totalExp = infExp + cavExp + arcExp + magExp + sctExp;
@@ -260,6 +281,14 @@ on('ready', () => {
         sendChat(mcname, armyOverview);
     };
 
+    const sendChatToFormation = (formName, title, text) => {
+        sendChat(mcname, `/w ${formName} &{template:desc} {{desc=<h3>${title}</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`);
+    };
+
+    const sendToSource = (inMsg, outMsg) => {
+        sendChat(mcname, `/w "${inMsg.who.replace(' (GM)', '')}" ${outMsg}`);
+    };
+
     on('chat:message', (msg) => {
         if (msg.type !== 'api') return;
         if (msg.content.startsWith('!mc') !== true) return;
@@ -267,7 +296,6 @@ on('ready', () => {
         let tokens = msg.content.split(' ');
         if (tokens.length < 2) return;
         let key = tokens[1];
-        log(msg.content);
         
         // BR sums
         let infExp = 0;
@@ -297,32 +325,40 @@ on('ready', () => {
         if (key === '-overview' || key === '-o' || key === '-help') {
             let menuString = `&{template:desc} {{desc=`
             + LeftAlignDiv.Open
-            + `<h3>Mass Combat Tools</h3><hr>`
-            + `<h4>Battle Commands</h4>`
-            + `<b>Note:</b> All of these functions require selection of tokens to work.`
-                + `<br>[Damage](!mc -damage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount})`
-                + `<br>[Scaled Damage](!mc -scaledDamage ?{Damage Type|Battle|Chaos|Casualty} ?{Amount} ?{Scale})`
-                + `<br>[Disorganize](!mc -disorganize ?{Please type the new disorganization scale.  Type 'false' to remove existing disorganization})`
-                + `<br>[Pop Disorganize](!mc -popDisorganize ?{Are you sure you wish to pop disorganization|yes|no})`
-                + `<br>[Recover](!mc -recover)`
-                + `<br>[Heal](!mc -heal ?{Points of healing})`
-                + `<br>[Guard](!mc -guard)`
-                + `<br>[Defend](!mc -defend)`
-                + `<br>[Route](!mc -route ?{Route Degree|Not Routed,-1|0 Failures,0|1 Failure,1|2 Failures,2|3 Failures,3})`
-                + `<br>[Route Damage](!mc -routeDamage)`
-            + `<br><br><h4>Initiative Commands</h4>`
-                + `<br>[Save Initiative](!mc -saveInitiative)`
-                + `<br>[Load Initiative](!mc -loadInitiative)`
-            + `<br><br><h4>Other Commands</h4>`
-            + `<b>Note:</b> All of these functions require selection of tokens to work.`
-                + `<br>[Long Rest](!mc -longrest ?{Sure you want to long rest|yes|no})`
-                + `<br>[Upkeep](!mc -upkeep)`
-                + `<br>[Battle Rating](!mc -battleRating)`
+            + HTag('Battle', 3)
+                + HTag('Damage', 4)
+                    + `[Direct](!mc -damage ?{Damage Type|Battle|Chaos|Fatality} ?{Amount})`
+                    + `[Scaled](!mc -scaledDamage ?{Damage Type|Battle|Chaos|Fatality} ?{Amount} ?{Scale})`
+                + HTag('Disorganize', 4)
+                    + `[Set](!mc -disorganize ?{Please type the new disorganization scale.  Type 'false' to remove existing disorganization})`
+                    + `[Pop](!mc -popDisorganize ?{Are you sure you wish to pop disorganization|yes|no})`
+                + HTag('Recovery', 4)
+                    + `[Start](!mc -startRecover)`
+                    + `[Finish](!mc -recover)`
+                + HTag('Restore', 4)
+                    + `[Heal](!mc -heal ?{Points of healing})`
+                    + `[Long Rest](!mc -longrest ?{Sure you want to long rest|yes|no})`
+                + HTag('Stance', 4)
+                    + `[Guard](!mc -guard)`
+                    + `[Defend](!mc -defend)`
+                + HTag('Route', 4)
+                    + `[Set](!mc -route ?{Route Degree|Not Routed,-1|0 Failures,0|1 Failure,1|2 Failures,2|3 Failures,3})`
+                    + `[Tick](!mc -routeDamage)`
+            + HTag('Initiative', 3)
+                + `[Save](!mc -saveInitiative ?{Are you sure you wish to SAVE initiative|yes|no})`
+                + `[Load](!mc -loadInitiative ?{Are you sure you wish to LOAD initiative|yes|no})`
+            + HTag('Other', 3)
+                + `[Upkeep](!mc -upkeep)`
+                + `[BR](!mc -battleRating)`
+                + `[AC](!mc -ac)`
+                + `[Speed](!mc -speed)`
             + LeftAlignDiv.Close
             + `}}`;
-            sendChat(mcname, menuString);
+            sendToSource(msg, menuString);
             return;
         } else if (key === '-saveInitiative') {
+            if (tokens.length < 3) return;
+            if (tokens[2] !== 'yes') return;
             let turnorder = [];
             let existingOrder = Campaign().get('turnorder');
             if (existingOrder != '') {
@@ -336,6 +372,8 @@ on('ready', () => {
             sendChat(mcname, saveMessage);
             return;
         } else if (key === '-loadInitiative') {
+            if (tokens.length < 3) return;
+            if (tokens[2] !== 'yes') return;
             Campaign().set('turnorder', JSON.stringify(state.MassCombat.SavedInitiative));
             state.MassCombat.SavedInitiative = [];
             let saveMessage = `&{template:desc} {{desc=Turn Order Loaded.}}`;
@@ -367,10 +405,11 @@ on('ready', () => {
                     let formToken = getObj('graphic', selection._id);
                     let formationType = formToken.get('represents');
                     let formName = formToken.get('name');
-                    let hp = parseInt(formToken.get('bar1_value'));
-                    let hpm = parseInt(formToken.get('bar1_max'));
-                    let cp = parseInt(formToken.get('bar3_value'));
-                    log(`Operation ${key} on ${formName} with ${hp}/${hpm} hp and ${cp} cp.`);
+                    let hp = parseInt(formToken.get('bar1_value')) || 0;
+                    let hpm = parseInt(formToken.get('bar1_max')) || 0 ;
+                    let fp = parseInt(formToken.get('bar2_value')) || 0;
+                    let cp = parseInt(formToken.get('bar3_value')) || 0 ;
+                    dlog(`Operation ${key} on ${formName} with ${hp}/${fp}/${cp}/${hpm}`);
     
                     // Load charsheet data.  Use a cache for this
                     let cacheEntry = cache[formationType];
@@ -417,6 +456,8 @@ on('ready', () => {
                                     npcType: getAttr(char, 'npc_type').get('current'),
                                     cr: parseInt(getAttr(char, 'npc_challenge').get('current')),
                                     xp: parseInt(getAttr(char, 'npc_xp').get('current')),
+                                    ac: parseInt(getAttr(char, 'npc_ac').get('current')),
+                                    speed: parseInt(getAttr(char, 'npc_speed').get('current')),
                                     traits: traits,
                                     formationTraitArray: formationTraitArray,
                                     formDetails: formDetails
@@ -432,7 +473,7 @@ on('ready', () => {
                         cache[formationType] = cacheEntry;
                     }
                     if (cacheEntry.isHero) {
-                        log(`Selected ${formName} is not an NPC`);
+                        dlog(`Selected ${formName} is not an NPC`);
                         heroList.push(new Hero(formName, hp, hpm));
                         if (processed === msg.selected.length) {
                             if (key === '-battleRating') {
@@ -454,11 +495,11 @@ on('ready', () => {
                     let sourceCreature = formTokens[4];
                     if (formTokens.length > 5) {
                         let sourceCreatureIndex = formDetails.indexOf(formTokens[5]);
-                        log('Source Index: ' + sourceCreatureIndex);
+                        dlog('Source Index: ' + sourceCreatureIndex);
                         sourceCreature = formDetails.substr(sourceCreatureIndex);
                     }
     
-                    log(`${npcType} NPC of ${protoCount} CR ${cr} ${sourceCreature} recruited via ${recruitSource}`);
+                    dlog(`${npcType} NPC of ${protoCount} CR ${cr} ${sourceCreature} recruited via ${recruitSource}`);
     
                     if (key === '-damage' || key === '-scaledDamage') {
                         if (tokens.length < 4) return;
@@ -469,20 +510,27 @@ on('ready', () => {
                             let damageScale = parseInt(tokens[4]);
                             amount *= damageScale;
                         }
-                        log('Damage Type: ' + type);
-                        log('Damage Amount: ' + amount);
-                        let chaosBurn = hp-amount < 0 ? hp-amount : 0;
+                        let chaosBurn = hp-amount < 0 
+                            ? hp-amount 
+                            : 0;
+                        let fatalZone = hp-amount >= 0
+                            ? amount
+                            : amount - hp;
+                        dlog(`Received ${amount} ${type} damage.  ChaosBurn: ${chaosBurn}, FatalZone: ${fatalZone}`);
                         let remHP = Math.max(0, hp-amount);
-                        log('Remaining HP: ' + remHP);
-                        log('Chaos Burn: ' + chaosBurn);
+                        if (remHP < 1) {
+                            formToken.set(StatusIcons.Dead, true);
+                        }
                         if (type === 'Battle') {
                             formToken.set('bar1_value', remHP);
+                            formToken.set('bar2_value', fp + 0.25 * fatalZone + chaosBurn);
                             formToken.set('bar3_value', Math.max(0, cp + amount / 2 + chaosBurn));
                         } else if (type === 'Chaos') {
                             formToken.set('bar1_value', remHP);
                             formToken.set('bar3_value', Math.max(0, cp + amount + chaosBurn));
-                        } else if (type === 'Casualty') {
+                        } else if (type === 'Fatality') {
                             formToken.set('bar1_value', remHP);
+                            formToken.set('bar2_value', fp + fatalZone + chaosBurn);
                             formToken.set('bar3_value', Math.max(0, cp + chaosBurn));
                         } else {
                             sendChat(mcname, 'Invalid Damage Type.');
@@ -491,10 +539,16 @@ on('ready', () => {
                         sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} ${type}${LeftAlignDiv.Close}}}`);
                     } else if (key === '-routeDamage') {
                         let remHP = Math.max(0, hp-hpm*.1);
+                        if (remHP < 1) {
+                            formToken.set(StatusIcons.Dead, true);
+                        }
                         formToken.set('bar1_value', remHP);
                         formToken.set('bar3_value', cp + hpm*.1);
                         sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${hpm*.1}${LeftAlignDiv.Close}}}`);
+                    } else if (key === '-startRecover') {
+                        formToken.set(StatusIcons.Recovering, true);
                     } else if (key === '-recover') {
+                        formToken.set(StatusIcons.Recovering, false);
                         formToken.set('bar1_value', Math.min(hpm, hp+cp));
                         formToken.set('bar3_value', 0);
                         sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>${LeftAlignDiv.Open}<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}${LeftAlignDiv.Close}}}`);
@@ -509,12 +563,16 @@ on('ready', () => {
                         if (tokens[2] !== 'yes') return;
                         let type = StripStatus(StatusIcons.Disorganized);
                         const popScale = GetStatusValue(formToken, type);
-                        log('Disorganization Scale of Token: ' + popScale);
+                        dlog('Disorganization Scale of Token: ' + popScale);
                         if (popScale !== true) {
                             let amount = hpm * 0.05 * popScale;
-                            log(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
+                            dlog(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
                             let remHP = Math.max(0, hp-amount);
+                            if (remHP < 1) {
+                                formToken.set(StatusIcons.Dead, true);
+                            }
                             formToken.set('bar1_value', remHP);
+                            formToken.set('bar2_value', fp + amount);
                             formToken.set(StatusIcons.Disorganized, false);
                             sendChat(mcname, `&{template:desc} {{desc=<h3>Disorganization Popped</h3><hr>${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} casualty${LeftAlignDiv.Close}}}`);
                         } else {
@@ -523,12 +581,13 @@ on('ready', () => {
                     } else if (key === '-longrest') {
                         if (tokens.length < 3) return;
                         if (tokens[2] !== 'yes') return;
-                        let postRecovery = hp+cp;
-                        let newMax = (hpm-postRecovery)/2 + postRecovery;
+                        let newMax = hpm - fp;
                         let reduxPerc = 1 - newMax/hpm;
                         reduxPerc = +reduxPerc.toFixed(2);
                         formToken.set('bar1_value', newMax);
                         formToken.set('bar1_max', newMax);
+                        formToken.set('bar2_value', 0);
+                        formToken.set('bar2_max', newMax);
                         formToken.set('bar3_value', 0);
                         formToken.set('bar3_max', newMax);
                         formToken.set('aura1_radius', 0.7);
@@ -563,7 +622,7 @@ on('ready', () => {
                                 buyString = `Procurement: <b>${buyPrice}gp</b><br>`;
                                 formType = 'Levied ';
                             }
-                            log(`Size Mod: ${sizeMod}  CR: ${cr}  Count: ${protoCount}  Recruit Mod: ${recruitMod}`);
+                            dlog(`Size Mod: ${sizeMod}  CR: ${cr}  Count: ${protoCount}  Recruit Mod: ${recruitMod}`);
                             upkeep = (sizeMod + cr) * protoCount * recruitMod;
                         }
                         upkeep = +upkeep.toFixed(2);
@@ -577,7 +636,7 @@ on('ready', () => {
                             sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
                         }
                     } else if (key === '-battleRating') {
-                        log('Calc Battle Rating');
+                        dlog('Calc Battle Rating');
                         switch (formType.toLowerCase()) {
                             case 'infantry':
                                 infExp += protoCount * xp;
@@ -608,7 +667,7 @@ on('ready', () => {
                                 sctTroops += protoCount;
                                 break;
                             default:
-                                log('Invalid Formation Type: ' + formType);
+                                dlog('Invalid Formation Type: ' + formType);
                                 sendChat(mcname, 'Invalid Formation Type: ' + formDetails);
                                 return;
                         }
@@ -619,11 +678,11 @@ on('ready', () => {
                         }
                     } else if (key === '-defend') {
                         const isDefending = formToken.get(StatusIcons.Defend);
-                        log('Defending Value: ' + isDefending);
+                        dlog('Defending Value: ' + isDefending);
                         formToken.set(StatusIcons.Defend, !isDefending);
                     } else if (key === '-guard') {
                         const isGuarding = formToken.get(StatusIcons.Guard);
-                        log('Guarding Value: ' + isGuarding);
+                        dlog('Guarding Value: ' + isGuarding);
                         formToken.set(StatusIcons.Guard, !isGuarding);
                     } else if (key === '-route') {
                         formToken.set(StatusIcons.Guard, false);
@@ -645,16 +704,20 @@ on('ready', () => {
                     } else if (key === '-heal') {
                         if (tokens.length < 3) return;
                         let healVal = parseInt(tokens[2]);
-                        let missingVitality = hpm - cp - hp;
+                        let missingVitality = hpm - fp - cp - hp;
                         let realHeal = Math.min(healVal, missingVitality);
-                        log(`Attempting Heal of ${healVal}, which was reduced to ${realHeal}`);
+                        dlog(`Attempting Heal of ${healVal}, which was reduced to ${realHeal}`);
                         formToken.set('bar1_value', hp + realHeal);
                         const capString = realHeal < healVal
                             ? `, capped at <b>${realHeal}`
                             : ``;
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Healing Received</h3><hr>${LeftAlignDiv.Open}<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}${LeftAlignDiv.Close}}}`);
+                        sendChatToFormation(formName, 'Healing Received', `<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}`);
+                    } else if (key === '-ac') {
+                        sendToSource(msg, `${formName}'s AC: ${cacheEntry.ac}`);
+                    } else if (key === '-speed') {
+                        sendToSource(msg, `${formName}'s Speed: ${cacheEntry.speed}`);
                     } else {
-                        log('Unrecognized Input');
+                        dlog('Unrecognized Input');
                         sendChat(mcname, 'Unrecognized input.');
                     }
                 });
