@@ -10,7 +10,7 @@ if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.6;
+    const v = 0.704;
     const cache = {};
     let debugLog = false;
 
@@ -22,11 +22,20 @@ on('ready', () => {
     };
 
     // Initialize the state
-    if (!state.MassCombat) {
-        state.MassCombat = {
-            SavedInitiative: []
-        };
-    } 
+    const ConfigureState = () => {
+        if (!state.MassCombat) {
+            state.MassCombat = {
+                SavedInitiative: []
+            };
+        }
+        if (!state.MassCombat.Version || state.MassCombat.Version < 0.704) {
+            log('-=> Updating Mass Combat to version 0.704');
+            state.MassCombat.Version = 0.704;
+            state.MassCombat.OperationHistory = [];
+            state.MassCombat.OperationHistorySize = 100;
+            state.MassCombat.OpId = 0;
+        }
+    }; ConfigureState();
 
     const getCharByAny = (nameOrId) => {
         let character = null;
@@ -251,13 +260,19 @@ on('ready', () => {
         let startTag = startLine ? brTag : '';
         let stopTag = stopLine ? brTag : '';
         return startTag + '<h' + tier + '>' + str + '</h' + tier + '>' + stopTag;
-    }
+    };
 
     const Bold = (str, startLine = false, stopLine = false) => {
         let startTag = startLine ? brTag : '';
         let stopTag = stopLine ? brTag : '';
         return startTag + '<b>' + str + '</b>' + stopTag;
-    }
+    };
+
+    const ListItem = (str, startLine = false, stopLine = false) => {
+        let startTag = startLine ? brTag : '';
+        let stopTag = stopLine ? brTag : '';
+        return startTag + '<li>' + str + '</li>' + stopTag;
+    };
 
     const printBattleRating = (infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList) => {
         let totalExp = infExp + cavExp + arcExp + magExp + sctExp;
@@ -287,6 +302,74 @@ on('ready', () => {
 
     const sendToSource = (inMsg, outMsg) => {
         sendChat(mcname, `/w "${inMsg.who.replace(' (GM)', '')}" ${outMsg}`);
+    };
+
+    class Operation {
+        constructor(name, formName, tokenId, barChanges, iconChanges) {
+            this.Name = name;
+            this.FormName = formName;
+            this.TokenId = tokenId;
+            this.BarChanges = barChanges;
+            this.IconChanges = iconChanges;
+            this.Timestamp = new Date().toUTCString();
+            this.Id = state.MassCombat.OpId++;
+        }
+    }
+
+    class Diff {
+        constructor(type, oldVal, newVal) {
+            this.Type = type;
+            this.Old = oldVal;
+            this.New = newVal;
+        }
+    }
+
+    const AttrEnum = {
+        HP: 'bar1_value',
+        HPM: 'bar1_max',
+        FP: 'bar2_value',
+        FPM: 'bar2_max',
+        CP: 'bar3_value',
+        CPM: 'bar3_max'
+    };
+
+    const DiffDict = {};
+    const InitDiffDict = () => {
+        DiffDict[AttrEnum.HP] = 'Hit Points';
+        DiffDict[AttrEnum.HPM] = 'Hit Point Max';
+        DiffDict[AttrEnum.CP] = 'Chaos Points';
+        DiffDict[AttrEnum.CPM] = 'Chaos Point Max';
+        DiffDict[AttrEnum.FP] = 'Fatality Points';
+        DiffDict[AttrEnum.FPM] = 'Fatality Point Max';
+        DiffDict[StatusIcons.Routed] = 'Routed';
+        DiffDict[StatusIcons.Guard] = 'Guarding';
+        DiffDict[StatusIcons.Defend] = 'Defending';
+        DiffDict[StatusIcons.Disorganized] = 'Disorganization';
+        DiffDict[StatusIcons.Recovering] = 'Recovering';
+        DiffDict[StatusIcons.Dead] = 'Dead';
+    }; InitDiffDict();
+
+    const addOperation = (operation) => {
+        // Add the new one
+        state.MassCombat.OperationHistory.push(operation);
+
+        // If limit exceeded, remove the oldest
+        if (state.MassCombat.OperationHistory.length > state.MassCombat.OperationHistorySize) {
+            state.MassCombat.OperationHistory.splice(0, 1);
+        }
+    };
+
+    const stringifyDiff = (diff) => {
+        const type = DiffDict[diff.Type];
+        const oldVal = diff.Old;
+        const newVal = diff.New;
+        
+        // Don't print things that didn't happen to change
+        if (oldVal === newVal) {
+            return '';
+        }
+
+        return ListItem(`${Bold(type)}: ${oldVal} to ${newVal}`);
     };
 
     on('chat:message', (msg) => {
@@ -352,6 +435,7 @@ on('ready', () => {
                 + `[BR](!mc -battleRating)`
                 + `[AC](!mc -ac)`
                 + `[Speed](!mc -speed)`
+                + `[History](!mc -history)`
             + LeftAlignDiv.Close
             + `}}`;
             sendToSource(msg, menuString);
@@ -379,6 +463,38 @@ on('ready', () => {
             let saveMessage = `&{template:desc} {{desc=Turn Order Loaded.}}`;
             sendChat(mcname, saveMessage);
             return;
+        } else if (key === '-history') {
+            let text = '';
+            for (let i = 0; i < state.MassCombat.OperationHistory.length; i++) {
+                const op = state.MassCombat.OperationHistory[i];
+                let opStr = HTag(op.Name, 4);
+                opStr += Bold('Target') + ': ' + op.FormName + brTag;
+                opStr += Bold('Time') + ': ' + op.Timestamp + brTag;
+                opStr += '<ul>';
+                let preLeng = opStr.length;
+                for (let j = 0; j < op.BarChanges.length; j++) {
+                    opStr += stringifyDiff(op.BarChanges[j]);
+                }
+                for (let j = 0; j < op.IconChanges.length; j++) {
+                    let changes = op.IconChanges[j];
+                    let iconChangeString = stringifyDiff(changes);
+                    opStr += iconChangeString;
+                }
+                let postLeng = opStr.length;
+                opStr += '</ul>';
+
+                // Don't paste an empty op that did nothing
+                if (postLeng > preLeng) {
+                    text += opStr;
+                }
+            }
+            const historyStr = `&{template:desc} {{desc=<h3>History</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`;
+            sendToSource(msg, historyStr);
+            return;
+        } else if (key === '-clearHistory') {
+            state.MassCombat.OperationHistory = [];
+            sendChat(mcname, 'Cleared Op History');
+            return;
         }
 
         // Iterate through selected tokens
@@ -405,10 +521,10 @@ on('ready', () => {
                     let formToken = getObj('graphic', selection._id);
                     let formationType = formToken.get('represents');
                     let formName = formToken.get('name');
-                    let hp = parseInt(formToken.get('bar1_value')) || 0;
-                    let hpm = parseInt(formToken.get('bar1_max')) || 0 ;
-                    let fp = parseInt(formToken.get('bar2_value')) || 0;
-                    let cp = parseInt(formToken.get('bar3_value')) || 0 ;
+                    let hp = parseInt(formToken.get(AttrEnum.HP)) || 0;
+                    let hpm = parseInt(formToken.get(AttrEnum.HPM)) || 0 ;
+                    let fp = parseInt(formToken.get(AttrEnum.FP)) || 0;
+                    let cp = parseInt(formToken.get(AttrEnum.CP)) || 0 ;
                     dlog(`Operation ${key} on ${formName} with ${hp}/${fp}/${cp}/${hpm}`);
     
                     // Load charsheet data.  Use a cache for this
@@ -518,46 +634,91 @@ on('ready', () => {
                             : amount - hp;
                         dlog(`Received ${amount} ${type} damage.  ChaosBurn: ${chaosBurn}, FatalZone: ${fatalZone}`);
                         let remHP = Math.max(0, hp-amount);
+                        let iconChanges = [];
                         if (remHP < 1) {
                             formToken.set(StatusIcons.Dead, true);
+                            iconChanges.push(new Diff(StatusIcons.Dead, hp < 1, true));
                         }
                         if (type === 'Battle') {
-                            formToken.set('bar1_value', remHP);
-                            formToken.set('bar2_value', fp + 0.25 * fatalZone + chaosBurn);
-                            formToken.set('bar3_value', Math.max(0, cp + amount / 2 + chaosBurn));
+                            const newFP = fp + 0.25 * fatalZone + chaosBurn;
+                            const newCP = Math.max(0, cp + amount / 2 + chaosBurn);
+                            formToken.set(AttrEnum.HP, remHP);
+                            formToken.set(AttrEnum.CP, newCP);
+                            formToken.set(AttrEnum.FP, newFP);
+                            const operation = new Operation('Battle Damage', formName, selection._id,
+                            [
+                                new Diff(AttrEnum.HP, hp, remHP),
+                                new Diff(AttrEnum.CP, cp, newCP),
+                                new Diff(AttrEnum.FP, fp, newFP)
+                            ], iconChanges);
+                            addOperation(operation);
                         } else if (type === 'Chaos') {
-                            formToken.set('bar1_value', remHP);
-                            formToken.set('bar3_value', Math.max(0, cp + amount + chaosBurn));
+                            const newCP = Math.max(0, cp + amount + chaosBurn);
+                            formToken.set(AttrEnum.HP, remHP);
+                            formToken.set(AttrEnum.CP, newCP);
+                            const operation = new Operation('Chaos Damage', formName, selection._id,
+                            [
+                                new Diff(AttrEnum.HP, hp, remHP),
+                                new Diff(AttrEnum.CP, cp, newCP)
+                            ], iconChanges);
+                            addOperation(operation);
                         } else if (type === 'Fatality') {
-                            formToken.set('bar1_value', remHP);
-                            formToken.set('bar2_value', fp + fatalZone + chaosBurn);
-                            formToken.set('bar3_value', Math.max(0, cp + chaosBurn));
+                            const newFP = fp + fatalZone + chaosBurn;
+                            const newCP = Math.max(0, cp + chaosBurn);
+                            formToken.set(AttrEnum.HP, remHP);
+                            formToken.set(AttrEnum.FP, newFP);
+                            formToken.set(AttrEnum.CP, newCP);
+                            const operation = new Operation('Fatality Damage', formName, selection._id,
+                            [
+                                new Diff(AttrEnum.HP, hp, remHP),
+                                new Diff(AttrEnum.CP, cp, newCP),
+                                new Diff(AttrEnum.FP, fp, newFP)
+                            ], iconChanges);
+                            addOperation(operation);
                         } else {
                             sendChat(mcname, 'Invalid Damage Type.');
                             return;
                         }
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Damage Received</h3><hr>${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} ${type}${LeftAlignDiv.Close}}}`);
+                        sendChatToFormation(formName, 'Damage Received', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} ${type}`);
                     } else if (key === '-routeDamage') {
                         let remHP = Math.max(0, hp-hpm*.1);
+                        let iconChanges = [];
                         if (remHP < 1) {
                             formToken.set(StatusIcons.Dead, true);
+                            iconChanges.push(new Diff(StatusIcons.Dead, hp < 1, true));
                         }
-                        formToken.set('bar1_value', remHP);
-                        formToken.set('bar3_value', cp + hpm*.1);
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Routed Drain</h3><hr${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${hpm*.1}${LeftAlignDiv.Close}}}`);
+                        const newCP = cp + hpm*.1;
+                        formToken.set(AttrEnum.HP, remHP);
+                        formToken.set(AttrEnum.CP, newCP);
+                        const operation = new Operation('Route Tick', formName, selection._id,
+                        [
+                            new Diff(AttrEnum.HP, hp, remHP),
+                            new Diff(AttrEnum.CP, cp, newCP)
+                        ], iconChanges);
+                        addOperation(operation);
+                        sendChatToFormation(formName, 'Routed Tick', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${hpm*.1}`);
                     } else if (key === '-startRecover') {
                         formToken.set(StatusIcons.Recovering, true);
+                        addOperation(new Operation('Start Recover', formName, selection._id, [], [new Diff(StatusIcons.Recovering, false, true)]));
                     } else if (key === '-recover') {
                         formToken.set(StatusIcons.Recovering, false);
-                        formToken.set('bar1_value', Math.min(hpm, hp+cp));
-                        formToken.set('bar3_value', 0);
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>Recovery</h3><hr>${LeftAlignDiv.Open}<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}${LeftAlignDiv.Close}}}`);
+                        const newHP = Math.min(hpm, hp+cp);
+                        log('HP to recover: ' + newHP);
+                        formToken.set(AttrEnum.HP, newHP);
+                        formToken.set(AttrEnum.CP, 0);
+                        const operation = new Operation('Finish Recovery', formName, selection._id,
+                            [ new Diff(AttrEnum.HP, hp, newHP), new Diff(AttrEnum.CP, cp, 0) ], 
+                            [ new Diff(StatusIcons.Recovering, true, false) ]);
+                        addOperation(operation);
+                        sendChatToFormation(formName, 'Recovery', `<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}`);
                     } else if (key === '-disorganize') {
                         if (tokens.length < 3) return;
+                        let type = StripStatus(StatusIcons.Disorganized);
+                        const oldVal = GetStatusValue(formToken, type);
                         let disorganizeScale = parseInt(tokens[2]);
                         formToken.set(StatusIcons.Disorganized, "" + disorganizeScale);
-                        let type = StripStatus(StatusIcons.Disorganized);
                         UpdateStatusValue(formToken, type, disorganizeScale);
+                        addOperation(new Operation('Disorganize', formName, selection._id, [], [new Diff(StatusIcons.Disorganized, oldVal, disorganizeScale)]));
                     } else if (key === '-popDisorganize') {
                         if (tokens.length < 3) return;
                         if (tokens[2] !== 'yes') return;
@@ -571,10 +732,15 @@ on('ready', () => {
                             if (remHP < 1) {
                                 formToken.set(StatusIcons.Dead, true);
                             }
-                            formToken.set('bar1_value', remHP);
-                            formToken.set('bar2_value', fp + amount);
+                            const newFP = fp + amount;
+                            formToken.set(AttrEnum.HP, remHP);
+                            formToken.set(AttrEnum.FP, newFP);
                             formToken.set(StatusIcons.Disorganized, false);
-                            sendChat(mcname, `&{template:desc} {{desc=<h3>Disorganization Popped</h3><hr>${LeftAlignDiv.Open}<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} casualty${LeftAlignDiv.Close}}}`);
+                            const operation = new Operation('Pop Disorganized', formName, selection._id,
+                                [ new Diff(AttrEnum.HP, hp, remHP), new Diff(AttrEnum.FP, fp, newFP) ], 
+                                [ new Diff(StatusIcons.Disorganized, popScale, false) ]);
+                            addOperation(operation);
+                            sendChatToFormation(formName, 'Disorganization Popped', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} fatality`);
                         } else {
                             sendChat(mcname, 'That token was not marked as disorganized!  Unable to pop.');
                         }
@@ -584,16 +750,25 @@ on('ready', () => {
                         let newMax = hpm - fp;
                         let reduxPerc = 1 - newMax/hpm;
                         reduxPerc = +reduxPerc.toFixed(2);
-                        formToken.set('bar1_value', newMax);
-                        formToken.set('bar1_max', newMax);
-                        formToken.set('bar2_value', 0);
-                        formToken.set('bar2_max', newMax);
-                        formToken.set('bar3_value', 0);
-                        formToken.set('bar3_max', newMax);
+                        formToken.set(AttrEnum.HP, newMax);
+                        formToken.set(AttrEnum.HPM, newMax);
+                        formToken.set(AttrEnum.FP, 0);
+                        formToken.set(AttrEnum.FPM, newMax);
+                        formToken.set(AttrEnum.CP, 0);
+                        formToken.set(AttrEnum.CPM, newMax);
                         formToken.set('aura1_radius', 0.7);
                         formToken.set('aura2_radius', 0.7);
                         let reduxScalar = 1-reduxPerc;
-                        sendChat(mcname, `&{template:desc} {{desc=<h3>${formName} Long Rest</h3><hr>${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})}}`);
+                        addOperation(new Operation('Long Rest', formName, selection._id,
+                            [
+                                new Diff(AttrEnum.HP, hp, newMax),
+                                new Diff(AttrEnum.HPM, hpm, newMax),
+                                new Diff(AttrEnum.CP, cp, 0),
+                                new Diff(AttrEnum.CPM, hpm, newMax),
+                                new Diff(AttrEnum.FP, fp, 0),
+                                new Diff(AttrEnum.FPM, hpm, newMax)
+                            ], []));
+                        sendChatToFormation(formName, 'Long Rest', `${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})`);
                     } else if (key === '-upkeep') {
                         let upkeep = 0;
                         let buyPrice = 0;
@@ -678,12 +853,12 @@ on('ready', () => {
                         }
                     } else if (key === '-defend') {
                         const isDefending = formToken.get(StatusIcons.Defend);
-                        dlog('Defending Value: ' + isDefending);
                         formToken.set(StatusIcons.Defend, !isDefending);
+                        addOperation(new Operation('Defending', formName, selection._id, [], [new Diff(StatusIcons.Defend, isDefending, !isDefending)]));
                     } else if (key === '-guard') {
                         const isGuarding = formToken.get(StatusIcons.Guard);
-                        dlog('Guarding Value: ' + isGuarding);
                         formToken.set(StatusIcons.Guard, !isGuarding);
+                        addOperation(new Operation('Guarding', formName, selection._id, [], [new Diff(StatusIcons.Guard, isGuarding, !isGuarding)]));
                     } else if (key === '-route') {
                         formToken.set(StatusIcons.Guard, false);
                         formToken.set(StatusIcons.Defend, false);
@@ -707,10 +882,13 @@ on('ready', () => {
                         let missingVitality = hpm - fp - cp - hp;
                         let realHeal = Math.min(healVal, missingVitality);
                         dlog(`Attempting Heal of ${healVal}, which was reduced to ${realHeal}`);
-                        formToken.set('bar1_value', hp + realHeal);
+                        const newHP = hp + realHeal;
+                        formToken.set(AttrEnum.HP, newHP);
                         const capString = realHeal < healVal
                             ? `, capped at <b>${realHeal}`
                             : ``;
+                        const operation = new Operation('Heal', formName, selection._id, [ new Diff(AttrEnum.HP, hp, newHP) ], []);
+                        addOperation(operation);
                         sendChatToFormation(formName, 'Healing Received', `<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}`);
                     } else if (key === '-ac') {
                         sendToSource(msg, `${formName}'s AC: ${cacheEntry.ac}`);
