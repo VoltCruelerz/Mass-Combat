@@ -703,7 +703,6 @@ on('ready', () => {
                     } else if (key === '-recover') {
                         formToken.set(StatusIcons.Recovering, false);
                         const newHP = Math.min(hpm, hp+cp);
-                        log('HP to recover: ' + newHP);
                         formToken.set(AttrEnum.HP, newHP);
                         formToken.set(AttrEnum.CP, 0);
                         const operation = new Operation('Finish Recovery', formName, selection._id,
