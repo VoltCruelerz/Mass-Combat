@@ -10,7 +10,7 @@ if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.704;
+    const v = 0.8;
     const cache = {};
     let debugLog = false;
 
@@ -28,11 +28,11 @@ on('ready', () => {
                 SavedInitiative: []
             };
         }
-        if (!state.MassCombat.Version || state.MassCombat.Version < 0.704) {
-            log('-=> Updating Mass Combat to version 0.704');
-            state.MassCombat.Version = 0.704;
+        if (!state.MassCombat.Version || state.MassCombat.Version < 0.8) {
+            log('-=> Updating Mass Combat to version 0.8');
+            state.MassCombat.Version = 0.8;
             state.MassCombat.OperationHistory = [];
-            state.MassCombat.OperationHistorySize = 100;
+            state.MassCombat.OperationHistorySize = 20;
             state.MassCombat.OpId = 0;
         }
     }; ConfigureState();
@@ -372,6 +372,101 @@ on('ready', () => {
         return ListItem(`${Bold(type)}: ${oldVal} to ${newVal}`);
     };
 
+    const rgbToHex = (rgb) => { 
+        var hex = Number(rgb).toString(16);
+        if (hex.length < 2) {
+            hex = "0" + hex;
+        }
+        return hex;
+    };
+
+    const getAuraColor = (hp, maxHP) => {
+        let half = maxHP*0.5;
+        let perc = hp/half;
+        let gVal = Math.floor(perc*255);
+        let gHex = rgbToHex(gVal).toLowerCase();
+        return '#ff' + gHex + '00';
+    };
+
+    const setTokenAura = (formToken, oldHP, newHP, maxHP) => {
+        if (oldHP === newHP) {
+            return;
+        }
+        let color = 'transparent';
+        let showAura = false;
+        let isDead = false;
+        let size = 0.0;
+        maxHP = maxHP > -1 
+            ? maxHP 
+            : (formToken.get(AttrEnum.HPM) || 0);
+        if (newHP < 1) {
+            isDead = true;
+        } else if (newHP * 2 <= maxHP) {
+            color = getAuraColor(newHP, maxHP);
+            size = 12.6;
+            showAura = true;
+        }
+
+        let params = {
+            'aura1_radius': size,
+            'aura1_color': color,
+            'showplayers_aura1': showAura,
+            'status_dead': isDead
+        };
+
+        dlog("Aura Params: " + JSON.stringify(params));
+        
+        formToken.set(params);
+    };
+
+    const revertOp = (op) => {
+        const formToken = getObj('graphic', op.TokenId);
+        log('Got Token');
+        const barReverts = [];
+        const iconReverts = [];
+        let oldHP = -1;
+        let newHP = -1;
+        let maxHP = -1;
+
+        log('Reverting Op ' + op.Name + ' with ' + op.BarChanges.length + ' bar changes and ' + op.IconChanges.length + ' icon changes.');
+
+        // Revert changes to the bars
+        for (let i = 0; i < op.BarChanges.length; i++) {
+            const diff = op.BarChanges[i];
+            const live = formToken.get(diff.Type);
+            if (diff.Type === AttrEnum.HP) {
+                oldHP = parseInt(formToken.get(AttrEnum.HP)) || 0;
+                newHP = diff.Old;
+            } else if (diff.Type === AttrEnum.HPM) {
+                maxHP = parseInt(formToken.get(AttrEnum.HPM)) || 0 ;
+            }
+            barReverts.push(new Diff(diff.Type, live, diff.Old));
+            dlog('Set ' + op.TokenId + '\' ' + diff.Type + ' from ' + live + ' to ' + diff.Old);
+            formToken.set(diff.Type, diff.Old);
+        }
+
+        // Revert changes to icons
+        for (let i = 0; i < op.IconChanges.length; i++) {
+            const diff = op.IconChanges[i];
+            const strippedType = StripStatus(diff.Type);
+            const live = GetStatusValue(formToken, strippedType);
+            iconReverts.push(new Diff(diff.Type, live, diff.Old));
+            dlog('Set ' + op.TokenId + '\' ' + diff.Type + ' from ' + live + ' to ' + diff.Old);
+            UpdateStatusValue(formToken, strippedType, diff.Old);
+        }
+
+        // Record the revert as its own revertible operation
+        addOperation(new Operation(`Revert ${op.Id}`, op.FormName, op.TokenId, barReverts, iconReverts));
+
+        // Update Auras
+        if (oldHP !== -1) {
+            setTokenAura(formToken, oldHP, newHP, maxHP);
+        }
+
+        // Print
+        sendChatToFormation(op.FormName, 'Reverted', 'Successfully reverted ' + op.Name);
+    }
+
     on('chat:message', (msg) => {
         if (msg.type !== 'api') return;
         if (msg.content.startsWith('!mc') !== true) return;
@@ -467,7 +562,7 @@ on('ready', () => {
             let text = '';
             for (let i = 0; i < state.MassCombat.OperationHistory.length; i++) {
                 const op = state.MassCombat.OperationHistory[i];
-                let opStr = HTag(op.Name, 4);
+                let opStr = HTag(`[${op.Id}] ${op.Name}`, 4);
                 opStr += Bold('Target') + ': ' + op.FormName + brTag;
                 opStr += Bold('Time') + ': ' + op.Timestamp + brTag;
                 opStr += '<ul>';
@@ -482,6 +577,7 @@ on('ready', () => {
                 }
                 let postLeng = opStr.length;
                 opStr += '</ul>';
+                opStr += `[Revert](!mc -revert ${op.Id})`;
 
                 // Don't paste an empty op that did nothing
                 if (postLeng > preLeng) {
@@ -492,9 +588,22 @@ on('ready', () => {
             sendToSource(msg, historyStr);
             return;
         } else if (key === '-clearHistory') {
+            if (tokens.length < 3) return;
+            if (tokens[2] !== 'yes') return;
             state.MassCombat.OperationHistory = [];
             sendChat(mcname, 'Cleared Op History');
             return;
+        } else if (key === '-revert') {
+            if (tokens.length < 3) return;
+            const id = parseInt(tokens[2]);
+            if(isNaN(id)) return;
+            for (let i = 0; i < state.MassCombat.OperationHistory.length; i++) {
+                const op = state.MassCombat.OperationHistory[i];
+                if (op.Id === id) {
+                    revertOp(op);
+                    return;
+                }
+            }
         }
 
         // Iterate through selected tokens
@@ -511,6 +620,8 @@ on('ready', () => {
                 sendChat(mcname, 'Calculating Upkeep.  This may take a few moments...');
                 wait = 100;
             }
+        } else {
+            sendToSource(msg, 'You must select a token for the command you selected.');
         }
         setTimeout(() => {
             msg.selected.forEach((selection) => {
@@ -636,9 +747,9 @@ on('ready', () => {
                         let remHP = Math.max(0, hp-amount);
                         let iconChanges = [];
                         if (remHP < 1) {
-                            formToken.set(StatusIcons.Dead, true);
                             iconChanges.push(new Diff(StatusIcons.Dead, hp < 1, true));
                         }
+                        setTokenAura(formToken, hp, remHP, hpm);
                         if (type === 'Battle') {
                             const newFP = fp + 0.25 * fatalZone + chaosBurn;
                             const newCP = Math.max(0, cp + amount / 2 + chaosBurn);
@@ -684,9 +795,9 @@ on('ready', () => {
                         let remHP = Math.max(0, hp-hpm*.1);
                         let iconChanges = [];
                         if (remHP < 1) {
-                            formToken.set(StatusIcons.Dead, true);
                             iconChanges.push(new Diff(StatusIcons.Dead, hp < 1, true));
                         }
+                        setTokenAura(formToken, hp, remHP, hpm);
                         const newCP = cp + hpm*.1;
                         formToken.set(AttrEnum.HP, remHP);
                         formToken.set(AttrEnum.CP, newCP);
@@ -709,6 +820,7 @@ on('ready', () => {
                             [ new Diff(AttrEnum.HP, hp, newHP), new Diff(AttrEnum.CP, cp, 0) ], 
                             [ new Diff(StatusIcons.Recovering, true, false) ]);
                         addOperation(operation);
+                        setTokenAura(formToken, hp, newHP, hpm);
                         sendChatToFormation(formName, 'Recovery', `<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}`);
                     } else if (key === '-disorganize') {
                         if (tokens.length < 3) return;
@@ -728,9 +840,7 @@ on('ready', () => {
                             let amount = hpm * 0.05 * popScale;
                             dlog(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
                             let remHP = Math.max(0, hp-amount);
-                            if (remHP < 1) {
-                                formToken.set(StatusIcons.Dead, true);
-                            }
+                            setTokenAura(formToken, hp, remHP, hpm);
                             const newFP = fp + amount;
                             formToken.set(AttrEnum.HP, remHP);
                             formToken.set(AttrEnum.FP, newFP);
@@ -755,8 +865,7 @@ on('ready', () => {
                         formToken.set(AttrEnum.FPM, newMax);
                         formToken.set(AttrEnum.CP, 0);
                         formToken.set(AttrEnum.CPM, newMax);
-                        formToken.set('aura1_radius', 0.7);
-                        formToken.set('aura2_radius', 0.7);
+                        setTokenAura(formToken, hp, newMax, newMax);
                         let reduxScalar = 1-reduxPerc;
                         addOperation(new Operation('Long Rest', formName, selection._id,
                             [
@@ -888,6 +997,7 @@ on('ready', () => {
                             : ``;
                         const operation = new Operation('Heal', formName, selection._id, [ new Diff(AttrEnum.HP, hp, newHP) ], []);
                         addOperation(operation);
+                        setTokenAura(formToken, hp, newHP, hpm);
                         sendChatToFormation(formName, 'Healing Received', `<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}`);
                     } else if (key === '-ac') {
                         sendToSource(msg, `${formName}'s AC: ${cacheEntry.ac}`);
