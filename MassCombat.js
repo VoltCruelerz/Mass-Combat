@@ -100,7 +100,7 @@ on('ready', () => {
             }
         });
         if (!attr || attr.length === 0) {
-            dlog('No Substr Attr: ' + char + ': ' + attrName);
+            dlog('No Substr Attr: ' + char + ': ' + substringName);
             return null;
         }
         return attr;
