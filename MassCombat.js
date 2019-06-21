@@ -92,23 +92,51 @@ on('ready', () => {
     }
 
     const getAttrsFromSub = (char, substringName) => {
-        const attr = filterObjs((obj) => {
+        const attrs = filterObjs((obj) => {
             if (obj.get('type') === 'attribute'
                 && obj.get('characterid') === char.id
                 && obj.get('name').indexOf(substringName) !== -1) {
                     return obj;
             }
         });
-        if (!attr || attr.length === 0) {
+        if (!attrs || attrs.length === 0) {
             dlog('No Substr Attr: ' + char + ': ' + substringName);
             return null;
         }
-        return attr;
+        return attrs;
     }
 
     const getAttrFromSub = (char, substringName) => {
         return getAttrsFromSub(char, substringName)[0];
     }
+
+    const setAttr = (charId, attrName, val) => {
+        const attr = findObjs({
+            type: 'attribute',
+            characterid: charId,
+            name: attrName,
+        })[0];
+        if (typeof attr === 'undefined' || attr == null) {
+            const attr = createObj('attribute', { name: attrName, characterid: charId, current: val+'' });
+        } else {
+            attr.setWithWorker({
+                current: val+'',
+            });
+        }
+    };
+
+    // Pulls the interior message out of carets (^)
+    const Decaret = (quotedString) => {
+        const startQuote = quotedString.indexOf('^');
+        const endQuote = quotedString.lastIndexOf('^');
+        if (startQuote >= endQuote) {
+            if (!quietMode) {
+                sendChat(drname, `**ERROR:** You must have a string within carets in the phrase ${string}`);
+            }
+            return null;
+        }
+        return quotedString.substring(startQuote + 1, endQuote);
+    };
 
     const sizeCostArray = [0.01, 0.03, 0.1, 0.3, 1.0, 3.0];
     const creatureSize = {
@@ -297,10 +325,12 @@ on('ready', () => {
     };
 
     const sendChatToFormation = (formName, title, text) => {
-        sendChat(mcname, `/w ${formName} &{template:desc} {{desc=<h3>${title}</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`);
+        const msg = `/w "${formName}" &{template:desc} {{desc=<h3>${title}</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`;
+        dlog(msg);
+        sendChat(mcname, msg);
     };
 
-    const sendToSource = (inMsg, outMsg) => {
+    const sendChatToSource = (inMsg, outMsg) => {
         sendChat(mcname, `/w "${inMsg.who.replace(' (GM)', '')}" ${outMsg}`);
     };
 
@@ -465,7 +495,136 @@ on('ready', () => {
 
         // Print
         sendChatToFormation(op.FormName, 'Reverted', 'Successfully reverted ' + op.Name);
+    };
+
+    class MoraleFactor {
+        constructor(name, value) {
+            this.Name = name;
+            this.Value = value;
+        }
     }
+
+    class Morale {
+        constructor(commanderCha, factors) {
+            this.CommanderCha = commanderCha;
+            this.Factors = factors;
+        }
+    }
+
+    const MoraleAttrName = 'mc_morale';
+
+    const GetMorale = (char, cr) => {
+        let attr = getAttr(char, MoraleAttrName);
+        if (!attr) {
+            dlog('Morale Attr does not exist yet');
+            const commanderCha = (cr/2).toFixed(0);
+            const factors = [
+                new MoraleFactor('Rest', 0),
+                new MoraleFactor('Food & Drink', 0),
+                new MoraleFactor('Equipment', 0),
+                new MoraleFactor('Compensation', 0),
+                new MoraleFactor('Personal Stake', 0),
+                new MoraleFactor('Prototype Might', 0),
+                new MoraleFactor('Commander Prep', 0),
+                new MoraleFactor('Treatment', 0),
+                new MoraleFactor('Camaraderie', 0),
+                new MoraleFactor('Terrain', 0),
+                new MoraleFactor('Weather', 0)
+            ];
+            const morale = new Morale(commanderCha, factors);
+            const moraleStr = JSON.stringify(morale);
+            dlog('New Morale String: ' + moraleStr);
+            setAttr(char.id, MoraleAttrName, moraleStr);
+            return morale;
+        }
+
+        const attrCurrent = attr.get('current');
+        dlog('Load existing morale attr.' + attrCurrent);
+        return JSON.parse(attrCurrent);
+    };
+
+    const GetMoraleRating = (factors) => {
+        // Sum factors
+        let morale = 0;
+        for (let i = 0; i < factors.length; i++) {
+            morale += factors[i].Value;
+        }
+
+        // Get string
+        let desc = '';
+        if (morale <= -10) {
+            desc = 'Openly Rebellious';
+        } else if (morale <= -8) {
+            desc = 'Mutinous';
+        } else if (morale <= -4) {
+            desc = 'Disgruntled';
+        } else if (morale <= -2) {
+            desc = 'Shaky';
+        } else if (morale < 2) {
+            desc = 'Average';
+        } else if (morale < 4) {
+            desc = 'Motivated';
+        } else if (morale < 8) {
+            desc = 'Stalwart';
+        } else if (morale < 10) {
+            desc = 'Fanatical';
+        } else {
+            desc = 'Unbreakable';
+        }
+
+        dlog('Get Morale Rating: ' + morale + ' = ' + desc);
+        return {
+            Value: morale,
+            Description: desc
+        };
+    };
+
+    const PrintMorale = (name, morale) => {
+        const rating = GetMoraleRating(morale.Factors);
+        const desc = rating.Description;
+        const value = rating.Value;
+
+        let moraleMsg = `${HTag(name, 4)}`
+            + `${Bold('Commander CHA')}: ${morale.CommanderCha} [+/-](!mc -setMorale ?{Please enter new Commander Charisma modifier} ^CommanderCha^)<br/>`
+            + `${Bold('Morale Rating')}: ${value} (${desc})<br/>`;
+
+        // Begin formulating deltas for the roll string
+        let deltas = morale.CommanderCha > 0
+            ? '+' + morale.CommanderCha
+            : morale.CommanderCha;
+        deltas += '[Commander Charisma]';
+
+        if (morale.Expand) {
+            moraleMsg += `${HTag('Morale Factors', 4)}`;
+        }
+        for (let i = 0; i < morale.Factors.length; i++) {
+            const factor = morale.Factors[i];
+            if (morale.Expand) {
+                moraleMsg += `${factor.Value} |`
+                    + `[-](!mc -setMorale ${factor.Value-1} ^${factor.Name}^)`
+                    + `[+](!mc -setMorale ${factor.Value+1} ^${factor.Name}^)`
+                    + ` ${factor.Name}<br/>`;
+            }
+
+            if (factor.Value !== 0) {
+                deltas += factor.Value > 0
+                    ? '+' + factor.Value
+                    : factor.Value;
+                deltas += `[${factor.Name}]`;
+            }
+        }
+        if (morale.Expand) {
+            moraleMsg += '[Hide](!mc -setMorale 0 ^Expand^)';
+        }
+        else {
+            moraleMsg += '<br/>[Expand](!mc -setMorale 1 ^Expand^)';
+        }
+        moraleMsg += `<hr>${HTag('Leadership Check', 4)}[[d20${deltas}]]`;
+        
+        dlog('Sending Morale to ' + name + ': ' + moraleMsg);
+        sendChatToFormation(name, 'Morale', moraleMsg);
+        return moraleMsg;
+    };
 
     on('chat:message', (msg) => {
         if (msg.type !== 'api') return;
@@ -522,18 +681,20 @@ on('ready', () => {
                 + HTag('Route', 4)
                     + `[Set](!mc -route ?{Route Degree|Not Routed,-1|0 Failures,0|1 Failure,1|2 Failures,2|3 Failures,3})`
                     + `[Tick](!mc -routeDamage)`
+            + HTag('Stats', 3)
+                + `[AC](!mc -ac)`
+                + `[Speed](!mc -speed)`
+                + `[Morale](!mc -morale)`
             + HTag('Initiative', 3)
                 + `[Save](!mc -saveInitiative ?{Are you sure you wish to SAVE initiative|yes|no})`
                 + `[Load](!mc -loadInitiative ?{Are you sure you wish to LOAD initiative|yes|no})`
             + HTag('Other', 3)
                 + `[Upkeep](!mc -upkeep)`
                 + `[BR](!mc -battleRating)`
-                + `[AC](!mc -ac)`
-                + `[Speed](!mc -speed)`
                 + `[History](!mc -history)`
             + LeftAlignDiv.Close
             + `}}`;
-            sendToSource(msg, menuString);
+            sendChatToSource(msg, menuString);
             return;
         } else if (key === '-saveInitiative') {
             if (tokens.length < 3) return;
@@ -585,7 +746,7 @@ on('ready', () => {
                 }
             }
             const historyStr = `&{template:desc} {{desc=<h3>History</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`;
-            sendToSource(msg, historyStr);
+            sendChatToSource(msg, historyStr);
             return;
         } else if (key === '-clearHistory') {
             if (tokens.length < 3) return;
@@ -621,7 +782,7 @@ on('ready', () => {
                 wait = 100;
             }
         } else {
-            sendToSource(msg, 'You must select a token for the command you selected.');
+            sendChatToSource(msg, 'You must select a token for the command you selected.');
         }
         setTimeout(() => {
             msg.selected.forEach((selection) => {
@@ -1000,12 +1161,53 @@ on('ready', () => {
                         setTokenAura(formToken, hp, newHP, hpm);
                         sendChatToFormation(formName, 'Healing Received', `<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}`);
                     } else if (key === '-ac') {
-                        sendToSource(msg, `${formName}'s AC: ${cacheEntry.ac}`);
+                        sendChatToSource(msg, `${formName}'s AC: ${cacheEntry.ac}`);
                     } else if (key === '-speed') {
-                        sendToSource(msg, `${formName}'s Speed: ${cacheEntry.speed}`);
+                        sendChatToSource(msg, `${formName}'s Speed: ${cacheEntry.speed}`);
+                    } else if (key === '-morale') {
+                        const char = getCharByAny(formationType);
+                        let morale = cacheEntry.Morale ? cacheEntry.Morale : GetMorale(char, cr);
+                        cacheEntry.Morale = morale;
+                        PrintMorale(formName, morale);
+                    } else if (key === '-setMorale') {
+                        if (msg.selected.length > 1) {
+                            sendChatToSource(msg, 'Error: set morale does not support multiselect.');
+                            return;
+                        }
+                        if (tokens.length < 4) return;
+                        let newVal = parseInt(tokens[2]);
+                        let factorName = Decaret(msg.content);
+                        dlog('Updating Factor ' + factorName + ' to ' + newVal);
+                        
+                        // Load existing
+                        const char = getCharByAny(formationType);
+                        let morale = cacheEntry.Morale ? cacheEntry.Morale : GetMorale(char, cr);
+
+                        // Mutate
+                        if (factorName === 'CommanderCha') {
+                            morale.CommanderCha = newVal;
+                        } else if (factorName === 'Expand') {
+                            morale.Expand = newVal === 1;
+                        } else {
+                            for (let i = 0; i < morale.Factors.length; i++) {
+                                const factor = morale.Factors[i];
+                                if (factor.Name === factorName) {
+                                    factor.Value = newVal;
+                                    break;
+                                }
+                            }
+                        }
+
+                        // Save
+                        const moraleStr = JSON.stringify(morale);
+                        setAttr(formationType, MoraleAttrName, moraleStr);
+                        cacheEntry.Morale = morale;
+
+                        // Print
+                        PrintMorale(formName, morale);
                     } else {
                         dlog('Unrecognized Input');
-                        sendChat(mcname, 'Unrecognized input.');
+                        sendChatToSource(msg, 'Unrecognized input.');
                     }
                 });
             });
