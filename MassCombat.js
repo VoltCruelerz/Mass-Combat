@@ -685,7 +685,6 @@ on('ready', () => {
 
         // Retrieves only the name attributes for a given char id (should be faster)
         GetTraitNameAttrs: (characterId) => {
-            dlog("Get Trait Name Attributes for Char ID: " + characterId);
             const suffix = OGLTrait.Name;
             const objs = findObjs({
                 type: "attribute",
