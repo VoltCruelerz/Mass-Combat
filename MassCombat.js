@@ -1,4 +1,4 @@
-if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
+//if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 /* Mass Combat
 *
 * A companion script for Kyburn's Mass Combat rule set: 
@@ -10,7 +10,7 @@ if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.8;
+    const v = 0.9;
     const cache = {};
     let debugLog = false;
 
@@ -34,6 +34,8 @@ on('ready', () => {
             state.MassCombat.OperationHistory = [];
             state.MassCombat.OperationHistorySize = 20;
             state.MassCombat.OpId = 0;
+        } else if (state.MassCombat.Version < 0.9) {
+            state.MassCombat.Version = 0.9;
         }
     }; ConfigureState();
 
@@ -1216,4 +1218,4 @@ on('ready', () => {
 
     log(`-=> ${mcname} v${v} online. <=-`);
 });
-if (typeof MarkStop != 'undefined') {MarkStop('MassCombat');}
+//if (typeof MarkStop != 'undefined') {MarkStop('MassCombat');}
