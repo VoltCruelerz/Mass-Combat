@@ -1,4 +1,4 @@
-//if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
+if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 /* Mass Combat
 *
 * A companion script for Kyburn's Mass Combat rule set: 
@@ -12,7 +12,7 @@ on('ready', () => {
     const mcname = 'MassCombat';
     const v = 0.9;
     const cache = {};
-    let debugLog = false;
+    let debugLog = true;
 
     // Debug Log
     const dlog = (str) => {
@@ -326,8 +326,8 @@ on('ready', () => {
         sendChat(mcname, armyOverview);
     };
 
-    const sendChatToFormation = (formName, title, text) => {
-        const msg = `/w "${formName}" &{template:desc} {{desc=<h3>${title}</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`;
+    const sendChatToFormation = (tokenName, title, text) => {
+        const msg = `/w "${tokenName}" &{template:desc} {{desc=<h3>${title}</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`;
         dlog(msg);
         sendChat(mcname, msg);
     };
@@ -337,9 +337,9 @@ on('ready', () => {
     };
 
     class Operation {
-        constructor(name, formName, tokenId, barChanges, iconChanges) {
+        constructor(name, tokenName, tokenId, barChanges, iconChanges) {
             this.Name = name;
-            this.FormName = formName;
+            this.tokenName = tokenName;
             this.TokenId = tokenId;
             this.BarChanges = barChanges;
             this.IconChanges = iconChanges;
@@ -357,12 +357,30 @@ on('ready', () => {
     }
 
     const AttrEnum = {
+        // Token Attr Fields
         HP: 'bar1_value',
         HPM: 'bar1_max',
         FP: 'bar2_value',
         FPM: 'bar2_max',
         CP: 'bar3_value',
-        CPM: 'bar3_max'
+        CPM: 'bar3_max',
+        TOKEN_NAME: 'name',
+
+        // Character Fields
+        CHAR_NAME: 'name',
+
+        // Sheet Attr Fields
+        NPC_CHAR_NAME: 'npc_name',
+        NPC_XP: 'npc_xp',
+        NPC_CR: 'npc_challenge',
+        NPC_TYPE: 'npc_type',
+        NPC_AC: 'npc_ac',
+        NPC_SPEED: 'npc_speed',
+        NPC_IS_CASTER: 'npcspellcastingflag',
+
+        // Mass Combat Attr Fields
+        MORALE: 'mc_morale',
+        IS_FORMATION: 'mc_is_formation'
     };
 
     const DiffDict = {};
@@ -488,7 +506,7 @@ on('ready', () => {
         }
 
         // Record the revert as its own revertible operation
-        addOperation(new Operation(`Revert ${op.Id}`, op.FormName, op.TokenId, barReverts, iconReverts));
+        addOperation(new Operation(`Revert ${op.Id}`, op.tokenName, op.TokenId, barReverts, iconReverts));
 
         // Update Auras
         if (oldHP !== -1) {
@@ -496,7 +514,7 @@ on('ready', () => {
         }
 
         // Print
-        sendChatToFormation(op.FormName, 'Reverted', 'Successfully reverted ' + op.Name);
+        sendChatToFormation(op.tokenName, 'Reverted', 'Successfully reverted ' + op.Name);
     };
 
     class MoraleFactor {
@@ -513,10 +531,8 @@ on('ready', () => {
         }
     }
 
-    const MoraleAttrName = 'mc_morale';
-
     const GetMorale = (char, cr) => {
-        let attr = getAttr(char, MoraleAttrName);
+        let attr = getAttr(char, AttrEnum.MORALE);
         if (!attr) {
             dlog('Morale Attr does not exist yet');
             const commanderCha = (cr/2).toFixed(0);
@@ -536,7 +552,7 @@ on('ready', () => {
             const morale = new Morale(commanderCha, factors);
             const moraleStr = JSON.stringify(morale);
             dlog('New Morale String: ' + moraleStr);
-            setAttr(char.id, MoraleAttrName, moraleStr);
+            setAttr(char.id, AttrEnum.MORALE, moraleStr);
             return morale;
         }
 
@@ -628,6 +644,200 @@ on('ready', () => {
         return moraleMsg;
     };
 
+    class Trait {
+        constructor(id, name, desc) {
+            this.ID = id;
+            this.Name = name;
+            this.Desc = desc;
+        }
+    }
+
+    class AttackParams {
+        constructor(type, range, toHit, target, damage1, element1, damage2, element2) {
+            this.Type = type;
+            this.Range = range;
+            this.ToHit = toHit;
+            this.Target = target;
+            this.Damage1 = damage1;
+            this.Element1 = element1;
+            this.Damage2 = damage2;
+            this.Element2 = element2;
+        }
+    }
+
+    class Action {
+        constructor(id, name, isAttack, attackParams, showDesc, desc) {
+            this.ID = id;
+            this.Name = name;
+            this.IsAttack = isAttack;
+            this.AttackParams = attackParams;
+            this.ShowDesc = showDesc;
+            this.Desc = desc;
+        }
+    }
+    
+    // Object containing the tools to parse OGL Sheet NPC Traits
+    const OGLTrait = {
+        // Prefix
+        RepeatingPrefix: 'repeating_npctrait_',
+        Name: '_name',
+        Description: '_desc',
+
+        // Retrieves only the name attributes for a given char id (should be faster)
+        GetTraitNameAttrs: (characterId) => {
+            dlog("Get Trait Name Attributes for Char ID: " + characterId);
+            const suffix = OGLTrait.Name;
+            const objs = findObjs({
+                type: "attribute",
+                characterid: characterId
+            });
+
+            let nameAttrs = [];
+            for(let i = 0; i < objs.length; i++) {
+                const attr = objs[i];
+                const attrName = attr.get("name");
+
+                if (attrName.endsWith(suffix) && attrName.startsWith(OGLTrait.RepeatingPrefix)) {
+                    nameAttrs.push(attr);
+                }
+            }
+            return nameAttrs;
+        },
+
+        // Gets a dictionary of traits by lowercased name to object ids
+        GetTraitIds: (characterId) => {
+            const re = new RegExp(`${OGLTrait.RepeatingPrefix}([^_]+)${OGLTrait.Name}$`);
+            const traitNameAttrs = OGLTrait.GetTraitNameAttrs(characterId);
+
+            return _.reduce(traitNameAttrs, (lookup, attr) => {
+                const match = attr.get("name").match(re);
+                match && (lookup[attr.get("current").toLowerCase()] = match[1]);
+                return lookup;
+            }, {});
+        },
+
+        // Gets an trait attribute with the provided traitId and suffix
+        GetTraitAttr: (charId, traitId, suffix) => {
+            return getAttr(charId, OGLTrait.RepeatingPrefix + traitId + suffix);
+        },
+
+        // Loads all the details into a trait object.  If a checkbox is undefined, assume default value.
+        GetTraitDetails: (charId, traitId) => {
+            const name = OGLTrait.GetTraitAttr(charId, traitId, OGLTrait.Name);
+            const desc = OGLTrait.GetTraitAttr(charId, traitId, OGLTrait.Description);
+            const trait = new Trait(traitId, name, desc);
+            dlog('Trait: ' + JSON.stringify(trait));
+            return trait;
+        }
+    };
+    
+    // Object containing the tools to parse OGL Sheet NPC Actions
+    const OGLAction = {
+        // Prefix
+        RepeatingPrefix: 'repeating_npcaction_',
+
+        // Suffixes
+        Name: '_name',
+        IsAttack: '_attack_flag',
+        AttackType: '_attack_type',
+        AttackRange: '_attack_range',
+        AttackToHit: '_attack_tohit',
+        AttackTarget: '_attack_target',
+        AttackDamage1: '_attack_damage',
+        AttackElement1: '_attack_damagetype',
+        AttackCrit1: '_attack_crit',// Hidden
+        AttackDamage2: '_attack_damage2',
+        AttackElement2: '_attack_damagetype2',
+        AttackCrit2: '_attack_crit2',// Hidden
+        ShowDescription: '_show_desc',
+        Description: '_description',
+
+        // Retrieves only the name attributes for a given char id (should be faster)
+        GetActionNameAttrs: (characterId) => {
+            const suffix = OGLAction.Name;
+            const objs = findObjs({
+                type: "attribute",
+                characterid: characterId
+            });
+
+            let nameAttrs = [];
+            for(let i = 0; i < objs.length; i++) {
+                const attr = objs[i];
+                const attrName = attr.get("name");
+                if (attrName.endsWith(suffix) && attrName.startsWith(OGLAction.RepeatingPrefix)) {
+                    nameAttrs.push(attr);
+                }
+            }
+            return nameAttrs;
+        },
+
+        // Gets a dictionary of actions by lowercased name to object ids
+        GetActionIds: (characterId) => {
+            const re = new RegExp(`${OGLAction.RepeatingPrefix}([^_]+)${OGLAction.Name}$`);
+            const actionNameAttrs = OGLAction.GetActionNameAttrs(characterId);
+
+            return _.reduce(actionNameAttrs, (lookup, attr) => {
+                const match = attr.get("name").match(re);
+                match && (lookup[attr.get("current").toLowerCase()] = match[1]);
+                return lookup;
+            }, {});
+        },
+
+        // Gets an action attribute with the provided actionId and suffix
+        GetActionAttr: (charId, actionId, suffix) => {
+            return getAttr(charId, OGLAction.RepeatingPrefix + actionId + suffix);
+        },
+
+        // Loads all the details into a action object.  If a checkbox is undefined, assume default value.
+        GetActionDetails: (charId, actionId) => {
+            const name = OGLAction.GetActionAttr(charId, actionId, OGLAction.Name);
+            const isAttack = OGLAction.GetActionAttr(charId, actionId, OGLAction.IsAttack);
+            let attackParams = null;
+            if (isAttack) {
+                const type = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackType);
+                const range = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackRange);
+                const toHit = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackToHit);
+                const target = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackTarget);
+                const damage1 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackDamage1);
+                const element1 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackElement1);
+                const damage2 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackDamage2);
+                const element2 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackElement2);
+                attackParams = new AttackParams(type, range, toHit, target, damage1, element1, damage2, element2);
+            }
+            const showDesc = OGLAction.GetActionAttr(charId, actionId, OGLAction.ShowDescription);
+            const desc = OGLAction.GetActionAttr(charId, actionId, OGLAction.Description);
+
+            const action = new Action(actionId, name, isAttack, attackParams, showDesc, desc);
+            dlog('Action: ' + JSON.stringify(action));
+            return action;
+        }
+    };
+
+    const BuildFormation = (token, char, charId, oldName, newName, protoCount, recruitSource) => {
+        // Load Traits
+        const traitIds = OGLTrait.GetTraitIds(charId);
+        dlog('Trait Count: ' + traitIds.length);
+        const traits = [];
+        for (let i = 0; i < traitIds.length; i++) {
+            const traitId = traitIds[i];
+            traits.push(OGLTrait.GetTraitDetails(charId, traitId));
+        }
+
+        // Load Actions
+        const actionIds = OGLAction.GetActionIds(charId);
+        dlog('Action Count: ' + actionIds.length);
+        const actions = [];
+        for (let i = 0; i < actionIds.length; i++) {
+            const actionId = actionIds[i];
+            actions.push(OGLAction.GetActionDetails(charId, actionId));
+        }
+
+        // Save
+        return;
+        char.set(AttrEnum.CHAR_NAME, newName);
+        token.set(AttrEnum.TOKEN_NAME, newName);
+    };
+
     on('chat:message', (msg) => {
         if (msg.type !== 'api') return;
         if (msg.content.startsWith('!mc') !== true) return;
@@ -694,6 +904,7 @@ on('ready', () => {
                 + `[Upkeep](!mc -upkeep)`
                 + `[BR](!mc -battleRating)`
                 + `[History](!mc -history)`
+                + `[Make Formation](!mc -makeFormation ?{Input the number of prototypes in this formation} ?{What is the source of this formation|Conscripted|Levied|Manufactured|Mercenary} ?{What formation type is this|Infantry|Cavalry|Archers|Scouts|Mages})`
             + LeftAlignDiv.Close
             + `}}`;
             sendChatToSource(msg, menuString);
@@ -726,7 +937,7 @@ on('ready', () => {
             for (let i = 0; i < state.MassCombat.OperationHistory.length; i++) {
                 const op = state.MassCombat.OperationHistory[i];
                 let opStr = HTag(`[${op.Id}] ${op.Name}`, 4);
-                opStr += Bold('Target') + ': ' + op.FormName + brTag;
+                opStr += Bold('Target') + ': ' + op.tokenName + brTag;
                 opStr += Bold('Time') + ': ' + op.Timestamp + brTag;
                 opStr += '<ul>';
                 let preLeng = opStr.length;
@@ -793,19 +1004,19 @@ on('ready', () => {
                     
                     // Load token data.  Unfortunately, we can't use the cache for this because you could have mook tokens with different hp bars
                     let formToken = getObj('graphic', selection._id);
-                    let formationType = formToken.get('represents');
-                    let formName = formToken.get('name');
+                    let tokenOwner = formToken.get('represents');
+                    let tokenName = formToken.get('name');
                     let hp = parseInt(formToken.get(AttrEnum.HP)) || 0;
                     let hpm = parseInt(formToken.get(AttrEnum.HPM)) || 0 ;
                     let fp = parseInt(formToken.get(AttrEnum.FP)) || 0;
                     let cp = parseInt(formToken.get(AttrEnum.CP)) || 0 ;
-                    dlog(`Operation ${key} on ${formName} with ${hp}/${fp}/${cp}/${hpm}`);
+                    dlog(`Operation ${key} on ${tokenName} with ${hp}/${fp}/${cp}/${hpm}`);
     
                     // Load charsheet data.  Use a cache for this
-                    let cacheEntry = cache[formationType];
+                    let cacheEntry = cache[tokenOwner];
                     if (!cacheEntry) {
                         buildNewEntry = true;
-                        let char = getCharByAny(formationType);
+                        let char = getCharByAny(tokenOwner);
 
                         // Discount accidental selections of unowned tokens or graphics
                         if (!char) {
@@ -820,7 +1031,7 @@ on('ready', () => {
 
                             // Discount non-formation NPCs
                             if (!traits) {
-                                heroList.push(new Hero(formName, hp, hpm));
+                                heroList.push(new Hero(tokenName, hp, hpm));
                                 return;
                             }
 
@@ -831,9 +1042,9 @@ on('ready', () => {
                                     char: char,
                                     isNPC: isNPC,
                                     isHero: true,
-                                    npcType: getAttr(char, 'npc_type').get('current'),
-                                    cr: parseInt(getAttr(char, 'npc_challenge').get('current')),
-                                    xp: parseInt(getAttr(char, 'npc_xp').get('current')),
+                                    npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
+                                    cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
+                                    xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
                                     traits: traits,
                                     formationTraitArray: formationTraitArray
                                 };
@@ -843,11 +1054,11 @@ on('ready', () => {
                                     char: char,
                                     isNPC: isNPC,
                                     isHero: false,
-                                    npcType: getAttr(char, 'npc_type').get('current'),
-                                    cr: parseInt(getAttr(char, 'npc_challenge').get('current')),
-                                    xp: parseInt(getAttr(char, 'npc_xp').get('current')),
-                                    ac: parseInt(getAttr(char, 'npc_ac').get('current')),
-                                    speed: parseInt(getAttr(char, 'npc_speed').get('current')),
+                                    npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
+                                    cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
+                                    xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
+                                    ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
+                                    speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
                                     traits: traits,
                                     formationTraitArray: formationTraitArray,
                                     formDetails: formDetails
@@ -860,23 +1071,48 @@ on('ready', () => {
                                 isHero: true
                             };
                         }
-                        cache[formationType] = cacheEntry;
+                        cache[tokenOwner] = cacheEntry;
                     }
+
+                    let npcType = cacheEntry.npcType;
+                    let cr = cacheEntry.cr;
+                    let xp = cacheEntry.xp;
+
+                    // Anything that isn't a formation is a hero.
                     if (cacheEntry.isHero) {
-                        dlog(`Selected ${formName} is not an NPC`);
-                        heroList.push(new Hero(formName, hp, hpm));
-                        if (processed === msg.selected.length) {
-                            if (key === '-battleRating') {
-                                printBattleRating(infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList);
-                            } else if (key === '-upkeep') {
-                                sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
+                        heroList.push(new Hero(tokenName, hp, hpm));
+                        if (cacheEntry.isNPC) {
+                            if (key === '-makeFormation') {
+                                if (tokens.length < 5) return;
+                                const protoCount = parseInt(tokens[2]) || 0;
+                                if (protoCount === 0) return;
+                                const recruitSource = tokens[3];
+                                const formationType = tokens[4];
+
+                                let char = getCharByAny(tokenOwner);
+
+                                // Reformats the name as "[NAME] x[COUNT]" and strips off any "Copy of " strings.
+                                let charName = char.get(AttrEnum.CHAR_NAME);
+                                const oldName = charName.replace(/Copy of /g, "");
+                                let newName = oldName + ' x' + protoCount;
+
+                                dlog(`Building new formation: ${newName}`);
+                                BuildFormation(formToken, char, char.id, oldName, newName, protoCount, recruitSource, formationType);
+                            }
+                        } else {
+                            dlog(`Selected ${tokenName} is not an NPC`);
+                            if (processed === msg.selected.length) {
+                                if (key === '-battleRating') {
+                                    printBattleRating(infExp, infCount, infTroops, cavExp, cavCount, cavTroops, arcExp, arcCount, arcTroops, magExp, magCount, magTroops, sctExp, sctCount, sctTroops, heroList);
+                                } else if (key === '-upkeep') {
+                                    sendChat(mcname, `&{template:desc} {{desc=<h3>Army Cost</h3><hr>Procurement Cost: <b>${purchaseCost}</b><br>Upkeep: <b>${upkeepCost}gp</b><hr>(plus mounts and gear for troops if relevant)}}`);
+                                }
                             }
                         }
                         return;
                     }
-                    let npcType = cacheEntry.npcType;
-                    let cr = cacheEntry.cr;
-                    let xp = cacheEntry.xp;
+
+                    // Determine formation count
                     let formDetails = cacheEntry.formDetails;
                     let formTokens = formDetails.split(' ');
                     let formType = formTokens[0];
@@ -919,7 +1155,7 @@ on('ready', () => {
                             formToken.set(AttrEnum.HP, remHP);
                             formToken.set(AttrEnum.CP, newCP);
                             formToken.set(AttrEnum.FP, newFP);
-                            const operation = new Operation('Battle Damage', formName, selection._id,
+                            const operation = new Operation('Battle Damage', tokenName, selection._id,
                             [
                                 new Diff(AttrEnum.HP, hp, remHP),
                                 new Diff(AttrEnum.CP, cp, newCP),
@@ -930,7 +1166,7 @@ on('ready', () => {
                             const newCP = Math.max(0, cp + amount + chaosBurn);
                             formToken.set(AttrEnum.HP, remHP);
                             formToken.set(AttrEnum.CP, newCP);
-                            const operation = new Operation('Chaos Damage', formName, selection._id,
+                            const operation = new Operation('Chaos Damage', tokenName, selection._id,
                             [
                                 new Diff(AttrEnum.HP, hp, remHP),
                                 new Diff(AttrEnum.CP, cp, newCP)
@@ -942,7 +1178,7 @@ on('ready', () => {
                             formToken.set(AttrEnum.HP, remHP);
                             formToken.set(AttrEnum.FP, newFP);
                             formToken.set(AttrEnum.CP, newCP);
-                            const operation = new Operation('Fatality Damage', formName, selection._id,
+                            const operation = new Operation('Fatality Damage', tokenName, selection._id,
                             [
                                 new Diff(AttrEnum.HP, hp, remHP),
                                 new Diff(AttrEnum.CP, cp, newCP),
@@ -953,7 +1189,7 @@ on('ready', () => {
                             sendChat(mcname, 'Invalid Damage Type.');
                             return;
                         }
-                        sendChatToFormation(formName, 'Damage Received', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} ${type}`);
+                        sendChatToFormation(tokenName, 'Damage Received', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} ${type}`);
                     } else if (key === '-routeDamage') {
                         let remHP = Math.max(0, hp-hpm*.1);
                         let iconChanges = [];
@@ -964,27 +1200,27 @@ on('ready', () => {
                         const newCP = cp + hpm*.1;
                         formToken.set(AttrEnum.HP, remHP);
                         formToken.set(AttrEnum.CP, newCP);
-                        const operation = new Operation('Route Tick', formName, selection._id,
+                        const operation = new Operation('Route Tick', tokenName, selection._id,
                         [
                             new Diff(AttrEnum.HP, hp, remHP),
                             new Diff(AttrEnum.CP, cp, newCP)
                         ], iconChanges);
                         addOperation(operation);
-                        sendChatToFormation(formName, 'Routed Tick', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${hpm*.1}`);
+                        sendChatToFormation(tokenName, 'Routed Tick', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${hpm*.1}`);
                     } else if (key === '-startRecover') {
                         formToken.set(StatusIcons.Recovering, true);
-                        addOperation(new Operation('Start Recover', formName, selection._id, [], [new Diff(StatusIcons.Recovering, false, true)]));
+                        addOperation(new Operation('Start Recover', tokenName, selection._id, [], [new Diff(StatusIcons.Recovering, false, true)]));
                     } else if (key === '-recover') {
                         formToken.set(StatusIcons.Recovering, false);
                         const newHP = Math.min(hpm, hp+cp);
                         formToken.set(AttrEnum.HP, newHP);
                         formToken.set(AttrEnum.CP, 0);
-                        const operation = new Operation('Finish Recovery', formName, selection._id,
+                        const operation = new Operation('Finish Recovery', tokenName, selection._id,
                             [ new Diff(AttrEnum.HP, hp, newHP), new Diff(AttrEnum.CP, cp, 0) ], 
                             [ new Diff(StatusIcons.Recovering, true, false) ]);
                         addOperation(operation);
                         setTokenAura(formToken, hp, newHP, hpm);
-                        sendChatToFormation(formName, 'Recovery', `<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}`);
+                        sendChatToFormation(tokenName, 'Recovery', `<b>Benefactor:</b> ${formDetails}<br><b>Regerated:</b> ${cp}`);
                     } else if (key === '-disorganize') {
                         if (tokens.length < 3) return;
                         let type = StripStatus(StatusIcons.Disorganized);
@@ -992,7 +1228,7 @@ on('ready', () => {
                         let disorganizeScale = parseInt(tokens[2]);
                         formToken.set(StatusIcons.Disorganized, "" + disorganizeScale);
                         UpdateStatusValue(formToken, type, disorganizeScale);
-                        addOperation(new Operation('Disorganize', formName, selection._id, [], [new Diff(StatusIcons.Disorganized, oldVal, disorganizeScale)]));
+                        addOperation(new Operation('Disorganize', tokenName, selection._id, [], [new Diff(StatusIcons.Disorganized, oldVal, disorganizeScale)]));
                     } else if (key === '-popDisorganize') {
                         if (tokens.length < 3) return;
                         if (tokens[2] !== 'yes') return;
@@ -1001,18 +1237,18 @@ on('ready', () => {
                         dlog('Disorganization Scale of Token: ' + popScale);
                         if (popScale !== true) {
                             let amount = hpm * 0.05 * popScale;
-                            dlog(`Popping Disorganized ${formName}, dealing ${amount} direct damage due to scale ${popScale}`);
+                            dlog(`Popping Disorganized ${tokenName}, dealing ${amount} direct damage due to scale ${popScale}`);
                             let remHP = Math.max(0, hp-amount);
                             setTokenAura(formToken, hp, remHP, hpm);
                             const newFP = fp + amount;
                             formToken.set(AttrEnum.HP, remHP);
                             formToken.set(AttrEnum.FP, newFP);
                             formToken.set(StatusIcons.Disorganized, false);
-                            const operation = new Operation('Pop Disorganized', formName, selection._id,
+                            const operation = new Operation('Pop Disorganized', tokenName, selection._id,
                                 [ new Diff(AttrEnum.HP, hp, remHP), new Diff(AttrEnum.FP, fp, newFP) ], 
                                 [ new Diff(StatusIcons.Disorganized, popScale, false) ]);
                             addOperation(operation);
-                            sendChatToFormation(formName, 'Disorganization Popped', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} fatality`);
+                            sendChatToFormation(tokenName, 'Disorganization Popped', `<b>Victim:</b> ${formDetails}<br><b>Damage:</b> ${amount} fatality`);
                         } else {
                             sendChat(mcname, 'That token was not marked as disorganized!  Unable to pop.');
                         }
@@ -1030,7 +1266,7 @@ on('ready', () => {
                         formToken.set(AttrEnum.CPM, newMax);
                         setTokenAura(formToken, hp, newMax, newMax);
                         let reduxScalar = 1-reduxPerc;
-                        addOperation(new Operation('Long Rest', formName, selection._id,
+                        addOperation(new Operation('Long Rest', tokenName, selection._id,
                             [
                                 new Diff(AttrEnum.HP, hp, newMax),
                                 new Diff(AttrEnum.HPM, hpm, newMax),
@@ -1039,7 +1275,7 @@ on('ready', () => {
                                 new Diff(AttrEnum.FP, fp, 0),
                                 new Diff(AttrEnum.FPM, hpm, newMax)
                             ], []));
-                        sendChatToFormation(formName, 'Long Rest', `${formName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})`);
+                        sendChatToFormation(tokenName, 'Long Rest', `${tokenName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})`);
                     } else if (key === '-upkeep') {
                         let upkeep = 0;
                         let buyPrice = 0;
@@ -1075,7 +1311,7 @@ on('ready', () => {
                         purchaseCost += buyPrice;
                         upkeepCost += upkeep;
                         if (msg.selected.length === 1) {
-                            sendChat(mcname, `&{template:desc} {{desc=<h3>${formType}${formName} Cost</h3><hr>${buyString}Upkeep: <b>${upkeep}gp</b><hr>(plus mounts and gear for ${protoCount} ${sourceCreature} if relevant)}}`);
+                            sendChat(mcname, `&{template:desc} {{desc=<h3>${formType}${tokenName} Cost</h3><hr>${buyString}Upkeep: <b>${upkeep}gp</b><hr>(plus mounts and gear for ${protoCount} ${sourceCreature} if relevant)}}`);
                             return;
                         }
                         if (processed === msg.selected.length) {
@@ -1125,11 +1361,11 @@ on('ready', () => {
                     } else if (key === '-defend') {
                         const isDefending = formToken.get(StatusIcons.Defend);
                         formToken.set(StatusIcons.Defend, !isDefending);
-                        addOperation(new Operation('Defending', formName, selection._id, [], [new Diff(StatusIcons.Defend, isDefending, !isDefending)]));
+                        addOperation(new Operation('Defending', tokenName, selection._id, [], [new Diff(StatusIcons.Defend, isDefending, !isDefending)]));
                     } else if (key === '-guard') {
                         const isGuarding = formToken.get(StatusIcons.Guard);
                         formToken.set(StatusIcons.Guard, !isGuarding);
-                        addOperation(new Operation('Guarding', formName, selection._id, [], [new Diff(StatusIcons.Guard, isGuarding, !isGuarding)]));
+                        addOperation(new Operation('Guarding', tokenName, selection._id, [], [new Diff(StatusIcons.Guard, isGuarding, !isGuarding)]));
                     } else if (key === '-route') {
                         formToken.set(StatusIcons.Guard, false);
                         formToken.set(StatusIcons.Defend, false);
@@ -1158,19 +1394,19 @@ on('ready', () => {
                         const capString = realHeal < healVal
                             ? `, capped at <b>${realHeal}`
                             : ``;
-                        const operation = new Operation('Heal', formName, selection._id, [ new Diff(AttrEnum.HP, hp, newHP) ], []);
+                        const operation = new Operation('Heal', tokenName, selection._id, [ new Diff(AttrEnum.HP, hp, newHP) ], []);
                         addOperation(operation);
                         setTokenAura(formToken, hp, newHP, hpm);
-                        sendChatToFormation(formName, 'Healing Received', `<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}`);
+                        sendChatToFormation(tokenName, 'Healing Received', `<b>Recipient:</b> ${formDetails}<br><b>Healing</b>: ${healVal}${capString}`);
                     } else if (key === '-ac') {
-                        sendChatToSource(msg, `${formName}'s AC: ${cacheEntry.ac}`);
+                        sendChatToSource(msg, `${tokenName}'s AC: ${cacheEntry.ac}`);
                     } else if (key === '-speed') {
-                        sendChatToSource(msg, `${formName}'s Speed: ${cacheEntry.speed}`);
+                        sendChatToSource(msg, `${tokenName}'s Speed: ${cacheEntry.speed}`);
                     } else if (key === '-morale') {
-                        const char = getCharByAny(formationType);
+                        const char = getCharByAny(tokenOwner);
                         let morale = cacheEntry.Morale ? cacheEntry.Morale : GetMorale(char, cr);
                         cacheEntry.Morale = morale;
-                        PrintMorale(formName, morale);
+                        PrintMorale(tokenName, morale);
                     } else if (key === '-setMorale') {
                         if (msg.selected.length > 1) {
                             sendChatToSource(msg, 'Error: set morale does not support multiselect.');
@@ -1182,7 +1418,7 @@ on('ready', () => {
                         dlog('Updating Factor ' + factorName + ' to ' + newVal);
                         
                         // Load existing
-                        const char = getCharByAny(formationType);
+                        const char = getCharByAny(tokenOwner);
                         let morale = cacheEntry.Morale ? cacheEntry.Morale : GetMorale(char, cr);
 
                         // Mutate
@@ -1202,11 +1438,11 @@ on('ready', () => {
 
                         // Save
                         const moraleStr = JSON.stringify(morale);
-                        setAttr(formationType, MoraleAttrName, moraleStr);
+                        setAttr(tokenOwner, AttrEnum.MORALE, moraleStr);
                         cacheEntry.Morale = morale;
 
                         // Print
-                        PrintMorale(formName, morale);
+                        PrintMorale(tokenName, morale);
                     } else {
                         dlog('Unrecognized Input');
                         sendChatToSource(msg, 'Unrecognized input.');
@@ -1218,4 +1454,4 @@ on('ready', () => {
 
     log(`-=> ${mcname} v${v} online. <=-`);
 });
-//if (typeof MarkStop != 'undefined') {MarkStop('MassCombat');}
+if (typeof MarkStop != 'undefined') {MarkStop('MassCombat');}
