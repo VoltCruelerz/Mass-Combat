@@ -86,11 +86,19 @@ on('ready', () => {
     }
 
     const getAttr = (char, attrName) => {
-        let attr = getAttrs(char, attrName);
+        let attrs = getAttrs(char, attrName);
+        if (!attrs) {
+            return null;
+        }
+        return attrs[0];
+    }
+
+    const getAttrCurrent = (char, attrName) => {
+        let attr = getAttr(char, attrName);
         if (!attr) {
             return null;
         }
-        return attr[0];
+        return attr.get('current');
     }
 
     const getAttrsFromSub = (char, substringName) => {
@@ -666,13 +674,14 @@ on('ready', () => {
     }
 
     class Action {
-        constructor(id, name, isAttack, attackParams, showDesc, desc) {
+        constructor(id, name, isAttack, attackParams, showDesc, desc, rollbase) {
             this.ID = id;
             this.Name = name;
             this.IsAttack = isAttack;
             this.AttackParams = attackParams;
             this.ShowDesc = showDesc;
             this.Desc = desc;
+            this.Rollbase = rollbase;
         }
     }
     
@@ -717,7 +726,7 @@ on('ready', () => {
 
         // Gets an trait attribute with the provided traitId and suffix
         GetTraitAttr: (char, traitId, suffix) => {
-            return getAttr(char, OGLTrait.RepeatingPrefix + traitId + suffix);
+            return getAttrCurrent(char, OGLTrait.RepeatingPrefix + traitId + suffix);
         },
 
         // Loads all the details into a trait object.  If a checkbox is undefined, assume default value.
@@ -748,8 +757,12 @@ on('ready', () => {
         AttackDamage2: '_attack_damage2',
         AttackElement2: '_attack_damagetype2',
         AttackCrit2: '_attack_crit2',// Hidden
+
         ShowDescription: '_show_desc',
         Description: '_description',
+
+        OptionsFlag: '_npc_options-flag',// This is just whether or not it's expanded
+        Rollbase: '_rollbase',// This is the actual roll calculation
 
         // Retrieves only the name attributes for a given char id (should be faster)
         GetActionNameAttrs: (characterId) => {
@@ -783,30 +796,33 @@ on('ready', () => {
         },
 
         // Gets an action attribute with the provided actionId and suffix
-        GetActionAttr: (charId, actionId, suffix) => {
-            return getAttr(charId, OGLAction.RepeatingPrefix + actionId + suffix);
+        GetActionAttr: (char, actionId, suffix) => {
+            return getAttrCurrent(char, OGLAction.RepeatingPrefix + actionId + suffix);
         },
 
         // Loads all the details into a action object.  If a checkbox is undefined, assume default value.
-        GetActionDetails: (charId, actionId) => {
-            const name = OGLAction.GetActionAttr(charId, actionId, OGLAction.Name);
-            const isAttack = OGLAction.GetActionAttr(charId, actionId, OGLAction.IsAttack);
+        GetActionDetails: (char, actionId) => {
+            const name = OGLAction.GetActionAttr(char, actionId, OGLAction.Name);
+            const isAttack = OGLAction.GetActionAttr(char, actionId, OGLAction.IsAttack) === 'on';
+            const desc = OGLAction.GetActionAttr(char, actionId, OGLAction.Description) || '';
             let attackParams = null;
             if (isAttack) {
-                const type = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackType);
-                const range = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackRange);
-                const toHit = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackToHit);
-                const target = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackTarget);
-                const damage1 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackDamage1);
-                const element1 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackElement1);
-                const damage2 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackDamage2);
-                const element2 = OGLAction.GetActionAttr(charId, actionId, OGLAction.AttackElement2);
+                const type = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackType) === "Ranged"
+                    ? "Ranged"
+                    : "Melee";
+                const range = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackRange) || '5 ft.';
+                const toHit = parseInt(OGLAction.GetActionAttr(char, actionId, OGLAction.AttackToHit)) || 0;
+                const target = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackTarget) || "one target";
+                const damage1 = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackDamage1) || '0';
+                const element1 = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackElement1) || 'unspecified';
+                const damage2 = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackDamage2) || '0';
+                const element2 = OGLAction.GetActionAttr(char, actionId, OGLAction.AttackElement2) || 'unspecified';
                 attackParams = new AttackParams(type, range, toHit, target, damage1, element1, damage2, element2);
             }
-            const showDesc = OGLAction.GetActionAttr(charId, actionId, OGLAction.ShowDescription);
-            const desc = OGLAction.GetActionAttr(charId, actionId, OGLAction.Description);
+            const showDesc = !isAttack || (OGLAction.GetActionAttr(char, actionId, OGLAction.ShowDescription) !== ' ' && desc.length > 0);
+            const rollbase = OGLAction.GetActionAttr(char, actionId, OGLAction.Rollbase);
 
-            const action = new Action(actionId, name, isAttack, attackParams, showDesc, desc);
+            const action = new Action(actionId, name, isAttack, attackParams, showDesc, desc, rollbase);
             dlog('Action: ' + JSON.stringify(action));
             return action;
         }
@@ -820,16 +836,15 @@ on('ready', () => {
             const traitId = traitIds[key];
             traits.push(OGLTrait.GetTraitDetails(char, traitId));
         }
-        return;
 
         // Load Actions
         const actionIds = OGLAction.GetActionIds(charId);
-        dlog('Action Count: ' + actionIds.length);
         const actions = [];
         for (let key in actionIds) {
             const actionId = actionIds[key];
-            actions.push(OGLAction.GetActionDetails(charId, actionId));
+            actions.push(OGLAction.GetActionDetails(char, actionId));
         }
+        return;
 
         // Save
         char.set(AttrEnum.CHAR_NAME, newName);
