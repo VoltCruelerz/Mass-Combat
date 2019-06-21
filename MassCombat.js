@@ -716,14 +716,14 @@ on('ready', () => {
         },
 
         // Gets an trait attribute with the provided traitId and suffix
-        GetTraitAttr: (charId, traitId, suffix) => {
-            return getAttr(charId, OGLTrait.RepeatingPrefix + traitId + suffix);
+        GetTraitAttr: (char, traitId, suffix) => {
+            return getAttr(char, OGLTrait.RepeatingPrefix + traitId + suffix);
         },
 
         // Loads all the details into a trait object.  If a checkbox is undefined, assume default value.
-        GetTraitDetails: (charId, traitId) => {
-            const name = OGLTrait.GetTraitAttr(charId, traitId, OGLTrait.Name);
-            const desc = OGLTrait.GetTraitAttr(charId, traitId, OGLTrait.Description);
+        GetTraitDetails: (char, traitId) => {
+            const name = OGLTrait.GetTraitAttr(char, traitId, OGLTrait.Name);
+            const desc = OGLTrait.GetTraitAttr(char, traitId, OGLTrait.Description);
             const trait = new Trait(traitId, name, desc);
             dlog('Trait: ' + JSON.stringify(trait));
             return trait;
@@ -815,24 +815,23 @@ on('ready', () => {
     const BuildFormation = (token, char, charId, oldName, newName, protoCount, recruitSource) => {
         // Load Traits
         const traitIds = OGLTrait.GetTraitIds(charId);
-        dlog('Trait Count: ' + traitIds.length);
         const traits = [];
-        for (let i = 0; i < traitIds.length; i++) {
-            const traitId = traitIds[i];
-            traits.push(OGLTrait.GetTraitDetails(charId, traitId));
+        for (let key in traitIds) {
+            const traitId = traitIds[key];
+            traits.push(OGLTrait.GetTraitDetails(char, traitId));
         }
+        return;
 
         // Load Actions
         const actionIds = OGLAction.GetActionIds(charId);
         dlog('Action Count: ' + actionIds.length);
         const actions = [];
-        for (let i = 0; i < actionIds.length; i++) {
-            const actionId = actionIds[i];
+        for (let key in actionIds) {
+            const actionId = actionIds[key];
             actions.push(OGLAction.GetActionDetails(charId, actionId));
         }
 
         // Save
-        return;
         char.set(AttrEnum.CHAR_NAME, newName);
         token.set(AttrEnum.TOKEN_NAME, newName);
     };
