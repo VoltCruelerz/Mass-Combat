@@ -101,6 +101,14 @@ on('ready', () => {
         return attr.get('current');
     }
 
+    const getAttrMax = (char, attrName) => {
+        let attr = getAttr(char, attrName);
+        if (!attr) {
+            return null;
+        }
+        return attr.get('max');
+    }
+
     const getAttrsFromSub = (char, substringName) => {
         const attrs = filterObjs((obj) => {
             if (obj.get('type') === 'attribute'
@@ -120,17 +128,24 @@ on('ready', () => {
         return getAttrsFromSub(char, substringName)[0];
     }
 
-    const setAttr = (charId, attrName, val) => {
+    const setAttr = (charId, attrName, current, max = '') => {
         const attr = findObjs({
             type: 'attribute',
             characterid: charId,
             name: attrName,
         })[0];
         if (typeof attr === 'undefined' || attr == null) {
-            const attr = createObj('attribute', { name: attrName, characterid: charId, current: val+'' });
+            const attr = createObj('attribute', 
+            { 
+                name: attrName, 
+                characterid: charId, 
+                current: current+'',
+                max: max+''
+            });
         } else {
             attr.setWithWorker({
-                current: val+'',
+                current: current+'',
+                max: max+''
             });
         }
     };
@@ -378,6 +393,7 @@ on('ready', () => {
         CHAR_NAME: 'name',
 
         // Sheet Attr Fields
+        NPC_HP: 'hp',
         NPC_CHAR_NAME: 'npc_name',
         NPC_XP: 'npc_xp',
         NPC_CR: 'npc_challenge',
@@ -652,6 +668,35 @@ on('ready', () => {
         return moraleMsg;
     };
 
+    const GenerateUUID = () => {
+        var a = 0;
+        var b = [];
+        return function () {
+            var c = (new Date()).getTime() + 0,
+            d = c === a;
+            a = c;
+            for (var e = new Array(8), f = 7; 0 <= f; f--) {
+                e[f] = '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz'.charAt(c % 64);
+                c = Math.floor(c / 64);
+            }
+            c = e.join('');
+            if (d) {
+                for (f = 11; 0 <= f && 63 === b[f]; f--) {
+                    b[f] = 0;
+                }
+                b[f]++;
+            } else {
+                for (f = 0; 12 > f; f++) {
+                    b[f] = Math.floor(64 * Math.random());
+                }
+            }
+            for (f = 0; 12 > f; f++) {
+                c += '-0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZ_abcdefghijklmnopqrstuvwxyz'.charAt(b[f]);
+            }
+            return c;
+        };
+    }
+
     class Trait {
         constructor(id, name, desc) {
             this.ID = id;
@@ -736,6 +781,13 @@ on('ready', () => {
             const trait = new Trait(traitId, name, desc);
             dlog('Trait: ' + JSON.stringify(trait));
             return trait;
+        },
+
+        // Creates and sets the value of a new Trait
+        CreateOGLTrait: (charId, name, description) => {
+            const traitId = GenerateUUID();
+            setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Name, name);
+            setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Description, description);
         }
     };
     
@@ -828,25 +880,110 @@ on('ready', () => {
         }
     };
 
-    const BuildFormation = (token, char, charId, oldName, newName, protoCount, recruitSource) => {
-        // Load Traits
-        const traitIds = OGLTrait.GetTraitIds(charId);
-        const traits = [];
-        for (let key in traitIds) {
-            const traitId = traitIds[key];
-            traits.push(OGLTrait.GetTraitDetails(char, traitId));
+    // Attempts to format the string in a way that is solvable.
+    const MakeSolvable = (eq) => {
+        dlog('Original Equation: ' + eq);
+
+        // Remove whitespace
+        eq = eq.replace(/\s/gmi, '');
+        dlog('Readable => Minified Equation: ' + eq);
+
+        // Change internal double brackets to parentheses to ensure order of operations
+        eq = eq.replace(/(\[\[)(.*?)(\]\])/gmi, (match, p1, p2, p3, offset, string) => {
+            return `(${multiplier * AttemptSolution(p2)})`;
+        });
+        dlog('[[]] => () Equation: ' + eq);
+
+        // Convert dice into parenthetical 1/2 so that even standalone or with one partner it doesn't break things.
+        eq = eq.replace(/(\d*)d(\d+)/gmi, (match, p1, p2, offset, string) => {
+            return p1 * p2 / 2;
+        });
+        dlog('d => Avg Equation: ' + eq);
+
+        // Remove any explanatory bracketed information.
+        eq = eq.replace(/(\[)(.*?)(\])/gmi, '');
+        dlog('[Comment] => \'\' Equation: ' + eq);
+
+        dlog('Final Equation: ' + eq);
+        return eq;
+    };
+
+    // Attempts to solve the roll equation for a given action.
+    const AttemptSolution = (rollEquation) => {
+        try {
+            if (!rollEquation || rollEquation === '') {
+                return 0;
+            }
+            if (rollEquation.includes('{') || rollEquation.includes('}')) {
+                throw new Error('Attempted to reference property value.  Value references are not supported at this time.');
+            }
+            const solvableEq = MakeSolvable(rollEquation);
+            return eval(solvableEq);
+        } catch (e) {
+            throw e;
         }
+    };
+
+    const ScaleAction = (charId, action, multiplier) => {
+        // Attempt to solve all fields first
+        try {
+            if (action.IsAttack) {
+                dlog('Before: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
+                action.AttackParams.Damage1 = multiplier * AttemptSolution(action.AttackParams.Damage1);
+                action.AttackParams.Damage2 = multiplier * AttemptSolution(action.AttackParams.Damage2);
+                dlog('After: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
+            }
+            if (action.Desc.length > 0) {
+                action.Desc = action.Desc.replace(/(\[\[)(.*?)(\]\])/gmi, (match, p1, p2, p3, offset, string) => {
+                    return (multiplier * AttemptSolution(p2)) + '';
+                });
+            }
+        } catch (e) {
+            sendChat(mcname, '/w gm Unable to automatically scale action ' + action.Name + ' due to complexities in its math.  Please perform this manually.  The scalar is ' + multiplier + '.');
+            sendChat(mcname, '/w gm The precise reason given is: ' + e.message);
+            log('ERROR: Unable to computer ' + action);
+            log('REASON: ' + e.message);
+            log('Stack: ' + e.stack);
+            return false;
+        }
+        
+        // Save changes.
+        if (action.IsAttack) {
+            setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.AttackDamage1, action.AttackParams.Damage1);
+            setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.AttackDamage2, action.AttackParams.Damage2);
+        }
+        setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.Description, action.Desc);
+        return true;
+    };
+
+    const BuildFormation = (token, char, charId, oldName, newName, protoCount, recruitSource, formationType) => {
+        // Adjust stats
+        const speed = parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')) || 0;
+        setAttr(charId, AttrEnum.NPC_SPEED, 10 * speed);
+        let hp = protoCount * (parseInt(getAttrMax(char, AttrEnum.NPC_HP)) || 0);
+        let damageMult = protoCount;
+        if (formationType === 'Infantry') {
+            hp *= 2;
+            damageMult /= 2;
+        }
+        setAttr(charId, AttrEnum.NPC_HP, hp, hp);
 
         // Load Actions
         const actionIds = OGLAction.GetActionIds(charId);
         const actions = [];
         for (let key in actionIds) {
             const actionId = actionIds[key];
-            actions.push(OGLAction.GetActionDetails(char, actionId));
+            const action = OGLAction.GetActionDetails(char, actionId);
+            ScaleAction(charId, action, damageMult);
+            actions.push(action);
         }
-        return;
 
-        // Save
+        // TODO - Create token actions
+
+        // Add formation trait
+        OGLTrait.CreateOGLTrait(charId, `${formationType} Formation of ${protoCount} ${recruitSource} Troops`, '');
+
+        // Rename
         char.set(AttrEnum.CHAR_NAME, newName);
         token.set(AttrEnum.TOKEN_NAME, newName);
     };
