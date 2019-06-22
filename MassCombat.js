@@ -12,11 +12,27 @@ on('ready', () => {
     const mcname = 'MassCombat';
     const v = 0.9;
     const cache = {};
-    let debugLog = true;
+
+    const LogLevels = {
+        Trace: 0,
+        Debug: 1,
+        Info: 2,
+        Warn: 3,
+        Error: 4,
+        Fatal: 5
+    };
+    let logLevel = LogLevels.Debug;
+
+    // Trace Log
+    const tlog = (str) => {
+        if (logLevel <= LogLevels.Trace) {
+            log(str);
+        }
+    };
 
     // Debug Log
     const dlog = (str) => {
-        if (debugLog) {
+        if (logLevel <= LogLevels.Debug) {
             log(str);
         }
     };
@@ -391,8 +407,10 @@ on('ready', () => {
 
         // Character Fields
         CHAR_NAME: 'name',
+        CHAR_DEFAULT_TOKEN_ASYNC: '_defaulttoken',
 
         // Sheet Attr Fields
+        INT_MOD: 'intelligence_mod',
         NPC_HP: 'hp',
         NPC_CHAR_NAME: 'npc_name',
         NPC_XP: 'npc_xp',
@@ -403,8 +421,9 @@ on('ready', () => {
         NPC_IS_CASTER: 'npcspellcastingflag',
 
         // Mass Combat Attr Fields
+        IS_FORMATION: 'mc_is_formation',
         MORALE: 'mc_morale',
-        IS_FORMATION: 'mc_is_formation'
+        COMMANDER_TO_HIT: 'mc_commander_to_hit'
     };
 
     const DiffDict = {};
@@ -785,10 +804,25 @@ on('ready', () => {
 
         // Creates and sets the value of a new Trait
         CreateOGLTrait: (charId, name, description) => {
-            const traitId = GenerateUUID();
+            const traitId = GenerateUUID()();
             setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Name, name);
             setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Description, description);
-        }
+        },
+        
+        // Dumps the list of all OGL Traits owned by the character ID provided
+        DumpTraits: (characterId) => {
+            const objs = findObjs({
+                type: "attribute",
+                characterid: characterId
+            });
+
+            for(let i = 0; i < objs.length; i++) {
+                const attr = objs[i];
+                if (attr.get("name").startsWith(OGLTrait.RepeatingPrefix)) {
+                    log('OGL TRAIT: ' + JSON.stringify(attr));
+                }
+            }
+        },
     };
     
     // Object containing the tools to parse OGL Sheet NPC Actions
@@ -882,29 +916,29 @@ on('ready', () => {
 
     // Attempts to format the string in a way that is solvable.
     const MakeSolvable = (eq) => {
-        dlog('Original Equation: ' + eq);
+        tlog('Original Equation: ' + eq);
 
         // Remove whitespace
         eq = eq.replace(/\s/gmi, '');
-        dlog('Readable => Minified Equation: ' + eq);
+        tlog('Readable => Minified Equation: ' + eq);
 
         // Change internal double brackets to parentheses to ensure order of operations
         eq = eq.replace(/(\[\[)(.*?)(\]\])/gmi, (match, p1, p2, p3, offset, string) => {
             return `(${multiplier * AttemptSolution(p2)})`;
         });
-        dlog('[[]] => () Equation: ' + eq);
+        tlog('[[]] => () Equation: ' + eq);
 
         // Convert dice into parenthetical 1/2 so that even standalone or with one partner it doesn't break things.
         eq = eq.replace(/(\d*)d(\d+)/gmi, (match, p1, p2, offset, string) => {
             return p1 * p2 / 2;
         });
-        dlog('d => Avg Equation: ' + eq);
+        tlog('d => Avg Equation: ' + eq);
 
         // Remove any explanatory bracketed information.
         eq = eq.replace(/(\[)(.*?)(\])/gmi, '');
-        dlog('[Comment] => \'\' Equation: ' + eq);
+        tlog('[Comment] => \'\' Equation: ' + eq);
 
-        dlog('Final Equation: ' + eq);
+        tlog('Final Equation: ' + eq);
         return eq;
     };
 
@@ -924,14 +958,17 @@ on('ready', () => {
         }
     };
 
-    const ScaleAction = (charId, action, multiplier) => {
+    const ScaleAction = (charId, action, multiplier, commanderAttackMod) => {
         // Attempt to solve all fields first
         try {
             if (action.IsAttack) {
-                dlog('Before: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
+                tlog('Before: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
                 action.AttackParams.Damage1 = multiplier * AttemptSolution(action.AttackParams.Damage1);
                 action.AttackParams.Damage2 = multiplier * AttemptSolution(action.AttackParams.Damage2);
-                dlog('After: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
+                tlog('After: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
+                tlog('Existing To-Hit=' + action.AttackParams.ToHit + ' Commander To-Hit=' + commanderAttackMod);
+                action.AttackParams.ToHit = commanderAttackMod + action.AttackParams.ToHit;
+                tlog('New To-Hit=' + action.AttackParams.ToHit);
             }
             if (action.Desc.length > 0) {
                 action.Desc = action.Desc.replace(/(\[\[)(.*?)(\]\])/gmi, (match, p1, p2, p3, offset, string) => {
@@ -951,14 +988,16 @@ on('ready', () => {
         if (action.IsAttack) {
             setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.AttackDamage1, action.AttackParams.Damage1);
             setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.AttackDamage2, action.AttackParams.Damage2);
+            setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.AttackToHit, action.AttackParams.ToHit);
         }
         setAttr(charId, OGLAction.RepeatingPrefix + action.ID + OGLAction.Description, action.Desc);
         return true;
     };
 
     const BuildFormation = (token, char, charId, oldName, newName, protoCount, recruitSource, formationType) => {
+
         // Adjust stats
-        const speed = parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')) || 0;
+        const speed = parseInt(getAttrCurrent(char, AttrEnum.NPC_SPEED)) || 0;
         setAttr(charId, AttrEnum.NPC_SPEED, 10 * speed);
         let hp = protoCount * (parseInt(getAttrMax(char, AttrEnum.NPC_HP)) || 0);
         let damageMult = protoCount;
@@ -967,25 +1006,57 @@ on('ready', () => {
             damageMult /= 2;
         }
         setAttr(charId, AttrEnum.NPC_HP, hp, hp);
+        const commanderAttackMod = parseInt(getAttrCurrent(char, AttrEnum.INT_MOD)) || 0;
+        setAttr(charId, AttrEnum.COMMANDER_TO_HIT, commanderAttackMod);
 
         // Load Actions
         const actionIds = OGLAction.GetActionIds(charId);
         const actions = [];
         for (let key in actionIds) {
             const actionId = actionIds[key];
-            const action = OGLAction.GetActionDetails(char, actionId);
-            ScaleAction(charId, action, damageMult);
+            const action = OGLAction.GetActionDetails(char, actionId, commanderAttackMod);
+            ScaleAction(charId, action, damageMult, commanderAttackMod);
             actions.push(action);
         }
 
-        // TODO - Create token actions
+        // Update current token
+        token.set(AttrEnum.TOKEN_NAME, newName);
+        token.set(AttrEnum.HP, hp);
+        token.set(AttrEnum.HPM, hp);
+        token.set(AttrEnum.FP, 0);
+        token.set(AttrEnum.FPM, hp);
+        token.set(AttrEnum.CP, 0);
+        token.set(AttrEnum.CPM, hp);
+
+        // Update default token
+        setDefaultTokenForCharacter(char, token);
 
         // Add formation trait
-        OGLTrait.CreateOGLTrait(charId, `${formationType} Formation of ${protoCount} ${recruitSource} Troops`, '');
+        const formTraitName = `${formationType} Formation of ${protoCount} ${recruitSource} Troops`;
+        const formTraitDesc = '';
+        OGLTrait.CreateOGLTrait(charId, formTraitName, formTraitDesc);
+        setAttr(charId, AttrEnum.IS_FORMATION, true);
 
         // Rename
         char.set(AttrEnum.CHAR_NAME, newName);
         token.set(AttrEnum.TOKEN_NAME, newName);
+        setAttr(charId, AttrEnum.NPC_CHAR_NAME, newName);
+
+        // Update Cache
+        cache[charId] = {
+            char: char,
+            isNPC: true,
+            isHero: false,
+            npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
+            cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
+            xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
+            ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
+            speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
+            formDetails: formTraitName
+        };
+
+        // Inform User
+        sendChat(mcname, `/w gm Formation construction complete.`);
     };
 
     on('chat:message', (msg) => {
@@ -1195,8 +1266,6 @@ on('ready', () => {
                                     npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
                                     cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
                                     xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
-                                    traits: traits,
-                                    formationTraitArray: formationTraitArray
                                 };
                             } else {
                                 let formDetails = formationTraitArray[0].get('current');
@@ -1209,8 +1278,6 @@ on('ready', () => {
                                     xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
                                     ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
                                     speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
-                                    traits: traits,
-                                    formationTraitArray: formationTraitArray,
                                     formDetails: formDetails
                                 };
                             }
@@ -1246,8 +1313,8 @@ on('ready', () => {
                                 const oldName = charName.replace(/Copy of /g, "");
                                 let newName = oldName + ' x' + protoCount;
 
-                                dlog(`Building new formation: ${newName}`);
-                                BuildFormation(formToken, char, char.id, oldName, newName, protoCount, recruitSource, formationType);
+                                sendChat(mcname, `/w gm Building new formation: ${newName}.  This may take a few seconds...`);
+                                setTimeout(BuildFormation, 100, formToken, char, char.id, oldName, newName, protoCount, recruitSource, formationType);
                             }
                         } else {
                             dlog(`Selected ${tokenName} is not an NPC`);
