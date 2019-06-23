@@ -308,6 +308,7 @@ on('ready', () => {
         Routed: "status_chained-heart",
         Guard: "status_sentry-gun",
         Defend: "status_bolt-shield",
+        Cooldown: "half-haze",
         Disorganized: "status_rolling-bomb",
         Recovering: "status_half-heart",
         Dead: "status_dead"
@@ -421,9 +422,12 @@ on('ready', () => {
         NPC_IS_CASTER: 'npcspellcastingflag',
 
         // Mass Combat Attr Fields
-        IS_FORMATION: 'mc_is_formation',
+        FORMATION: 'mc_is_formation',
         MORALE: 'mc_morale',
-        COMMANDER_TO_HIT: 'mc_commander_to_hit'
+        COMMANDER_TO_HIT: 'mc_commander_to_hit',
+        PRIME_ACTION_DESC: 'mc_prime_action_descriptions',
+        SOURCE: 'mc_source',
+        LEGIBLE_TRAIT_ID: 'mc_legible_trait_id'
     };
 
     const DiffDict = {};
@@ -788,15 +792,20 @@ on('ready', () => {
             }, {});
         },
 
-        // Gets an trait attribute with the provided traitId and suffix
+        // Gets a trait attribute with the provided traitId and suffix
         GetTraitAttr: (char, traitId, suffix) => {
+            return getAttr(char, OGLTrait.RepeatingPrefix + traitId + suffix);
+        },
+
+        // Gets a trait attribute's current with the provided traitId and suffix
+        GetTraitAttrCur: (char, traitId, suffix) => {
             return getAttrCurrent(char, OGLTrait.RepeatingPrefix + traitId + suffix);
         },
 
         // Loads all the details into a trait object.  If a checkbox is undefined, assume default value.
         GetTraitDetails: (char, traitId) => {
-            const name = OGLTrait.GetTraitAttr(char, traitId, OGLTrait.Name);
-            const desc = OGLTrait.GetTraitAttr(char, traitId, OGLTrait.Description);
+            const name = OGLTrait.GetTraitAttrCur(char, traitId, OGLTrait.Name);
+            const desc = OGLTrait.GetTraitAttrCur(char, traitId, OGLTrait.Description);
             const trait = new Trait(traitId, name, desc);
             dlog('Trait: ' + JSON.stringify(trait));
             return trait;
@@ -807,6 +816,7 @@ on('ready', () => {
             const traitId = GenerateUUID()();
             setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Name, name);
             setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Description, description);
+            return traitId;
         },
         
         // Dumps the list of all OGL Traits owned by the character ID provided
@@ -958,27 +968,32 @@ on('ready', () => {
         }
     };
 
-    const ScaleAction = (charId, action, multiplier, commanderAttackMod) => {
+    // Scales an action up or down and updates the commander attack mod
+    const ScaleAction = (charId, action, multiplier, commanderAttackModDelta, primeActionDescs, protoCount) => {
         // Attempt to solve all fields first
         try {
             if (action.IsAttack) {
                 tlog('Before: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
-                action.AttackParams.Damage1 = multiplier * AttemptSolution(action.AttackParams.Damage1);
-                action.AttackParams.Damage2 = multiplier * AttemptSolution(action.AttackParams.Damage2);
+                action.AttackParams.Damage1 = Math.round(multiplier * AttemptSolution(action.AttackParams.Damage1));// Round just so that we don't run into bit representation issues
+                action.AttackParams.Damage2 = Math.round(multiplier * AttemptSolution(action.AttackParams.Damage2));
                 tlog('After: D1=' + action.AttackParams.Damage1 + ' D2=' + action.AttackParams.Damage2);
-                tlog('Existing To-Hit=' + action.AttackParams.ToHit + ' Commander To-Hit=' + commanderAttackMod);
-                action.AttackParams.ToHit = commanderAttackMod + action.AttackParams.ToHit;
+                tlog('Existing To-Hit=' + action.AttackParams.ToHit + ' Commander To-Hit=' + commanderAttackModDelta);
+                action.AttackParams.ToHit = commanderAttackModDelta + action.AttackParams.ToHit;
                 tlog('New To-Hit=' + action.AttackParams.ToHit);
             }
             if (action.Desc.length > 0) {
-                action.Desc = action.Desc.replace(/(\[\[)(.*?)(\]\])/gmi, (match, p1, p2, p3, offset, string) => {
-                    return (multiplier * AttemptSolution(p2)) + '';
+                // Archive the original so that if the formation gets resized later, the editable location data isn't lost.
+                if (!primeActionDescs[action.ID]) {
+                    primeActionDescs[action.ID] = action.Desc;
+                }
+                action.Desc = primeActionDescs[action.ID].replace(/(\[\[)(.*?)(\]\])/gmi, (match, p1, p2, p3, offset, string) => {
+                    return (protoCount * AttemptSolution(p2)) + '';
                 });
             }
         } catch (e) {
-            sendChat(mcname, '/w gm Unable to automatically scale action ' + action.Name + ' due to complexities in its math.  Please perform this manually.  The scalar is ' + multiplier + '.');
+            sendChat(mcname, '/w gm WARNING: Unable to automatically scale action ' + action.Name + ' due to complexities in its math.  Please perform this manually.  The scalar is ' + multiplier + '.');
             sendChat(mcname, '/w gm The precise reason given is: ' + e.message);
-            log('ERROR: Unable to computer ' + action);
+            log('ERROR: Unable to compute ' + action);
             log('REASON: ' + e.message);
             log('Stack: ' + e.stack);
             return false;
@@ -994,69 +1009,135 @@ on('ready', () => {
         return true;
     };
 
-    const BuildFormation = (token, char, charId, oldName, newName, protoCount, recruitSource, formationType) => {
+    const GetLegibleTrait = (formationType, protoCount, recruitSource) => {
+        return `${formationType} Formation of ${protoCount} ${recruitSource} Troops`;
+    };
 
-        // Adjust stats
-        const speed = parseInt(getAttrCurrent(char, AttrEnum.NPC_SPEED)) || 0;
-        setAttr(charId, AttrEnum.NPC_SPEED, 10 * speed);
-        let hp = protoCount * (parseInt(getAttrMax(char, AttrEnum.NPC_HP)) || 0);
-        let damageMult = protoCount;
-        if (formationType === 'Infantry') {
-            hp *= 2;
-            damageMult /= 2;
+    // Resizes a formation
+    const ResizeFormation = (token, tokenName, char, charId, healthScale, damageScale, commanderAttackModDelta, newProtoCount) => {
+        // Attempt to load the prototype count.  If it's not possible, that means this is a brand-new formation.
+        // In such a case, average health and damage scales so that this works, even with infantry.
+        let oldProtoCount = parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 1;
+
+        // Load current hp.  Cap current at max in case we had temps or something.
+        let hpm = parseInt(token.get(AttrEnum.HPM)) || 0;
+
+        // Scale hp and damage so that it matches up with an integer number of prototypes
+        dlog('RAW: Health Scale=' + healthScale + ' Damage Scale=' + damageScale);
+        if (healthScale < 1 || damageScale < 1) {
+            // Establish the max hp of each soldier
+            const protoHealth = hpm/oldProtoCount;
+            dlog('  Proto Health=' + protoHealth);
+            
+            // Find the new maximum hp
+            const newMaxHP = protoHealth * newProtoCount;
+            dlog('  New Max HP=' + newMaxHP);
+
+            // Recalculate the scale factors to result in integers for future math.
+            healthScale = newMaxHP / hpm;
+
+            // We can use the same fraction here because there is no such thing as down-scaling a formation and simultaneously converting it to infantry lol.
+            damageScale = newMaxHP / hpm;
         }
-        setAttr(charId, AttrEnum.NPC_HP, hp, hp);
-        const commanderAttackMod = parseInt(getAttrCurrent(char, AttrEnum.INT_MOD)) || 0;
-        setAttr(charId, AttrEnum.COMMANDER_TO_HIT, commanderAttackMod);
-
-        // Load Actions
-        const actionIds = OGLAction.GetActionIds(charId);
-        const actions = [];
-        for (let key in actionIds) {
-            const actionId = actionIds[key];
-            const action = OGLAction.GetActionDetails(char, actionId, commanderAttackMod);
-            ScaleAction(charId, action, damageMult, commanderAttackMod);
-            actions.push(action);
-        }
-
-        // Update current token
-        token.set(AttrEnum.TOKEN_NAME, newName);
-        token.set(AttrEnum.HP, hp);
-        token.set(AttrEnum.HPM, hp);
-        token.set(AttrEnum.FP, 0);
-        token.set(AttrEnum.FPM, hp);
-        token.set(AttrEnum.CP, 0);
-        token.set(AttrEnum.CPM, hp);
-
-        // Update default token
-        setDefaultTokenForCharacter(char, token);
-
-        // Add formation trait
-        const formTraitName = `${formationType} Formation of ${protoCount} ${recruitSource} Troops`;
-        const formTraitDesc = '';
-        OGLTrait.CreateOGLTrait(charId, formTraitName, formTraitDesc);
-        setAttr(charId, AttrEnum.IS_FORMATION, true);
+        hpm = Math.round(hpm*healthScale);
+        dlog('ROUNDED: Health Scale=' + healthScale + ' Damage Scale=' + damageScale);
+        setAttr(charId, AttrEnum.NPC_HP, hpm, hpm);
 
         // Rename
+        let oldProtoTag = ' x' + oldProtoCount;
+        dlog('Old Proto Count: ' + oldProtoTag);
+        let troopName = tokenName.substring(0, tokenName.indexOf(oldProtoTag));
+        let newName = troopName + ' x' + newProtoCount;
         char.set(AttrEnum.CHAR_NAME, newName);
         token.set(AttrEnum.TOKEN_NAME, newName);
         setAttr(charId, AttrEnum.NPC_CHAR_NAME, newName);
 
-        // Update Cache
-        cache[charId] = {
-            char: char,
-            isNPC: true,
-            isHero: false,
-            npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
-            cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
-            xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
-            ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
-            speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
-            formDetails: formTraitName
-        };
+        // Load and Rescale Actions
+        const oldPrimeDescs = getAttrCurrent(char, AttrEnum.PRIME_ACTION_DESC);
+        const primeActionDescs = oldPrimeDescs 
+            ? JSON.parse(oldPrimeDescs) 
+            : {};
+        const actionIds = OGLAction.GetActionIds(charId);
+        for (let key in actionIds) {
+            const actionId = actionIds[key];
+            const action = OGLAction.GetActionDetails(char, actionId);
+            ScaleAction(charId, action, damageScale, commanderAttackModDelta, primeActionDescs, newProtoCount);
+        }
+        setAttr(charId, AttrEnum.PRIME_ACTION_DESC, JSON.stringify(primeActionDescs));// Resave in case the user altered the list when we weren't looking
 
-        // Inform User
-        sendChat(mcname, `/w gm Formation construction complete.`);
+        // Update current token
+        token.set(AttrEnum.TOKEN_NAME, newName);
+        token.set(AttrEnum.HP, hpm);
+        token.set(AttrEnum.HPM, hpm);
+        token.set(AttrEnum.FP, 0);
+        token.set(AttrEnum.FPM, hpm);
+        token.set(AttrEnum.CP, 0);
+        token.set(AttrEnum.CPM, hpm);
+
+        // Update default token
+        setDefaultTokenForCharacter(char, token);
+
+        // Update prototype count
+        setAttr(charId, AttrEnum.FORMATION, newProtoCount);
+
+        // Update legible trait
+        const source = getAttrCurrent(char, AttrEnum.SOURCE);
+        const legibleID = getAttrCurrent(char, AttrEnum.LEGIBLE_TRAIT_ID);
+        // In event it's freshly-created attr, don't redo this part
+        if (source && legibleID) {
+            const legibleTraitName = GetLegibleTrait(troopName, newProtoCount, source);
+            setAttr(charId, OGLTrait.RepeatingPrefix + legibleID + OGLTrait.Name, legibleTraitName);
+        }
+
+        // Provide status update
+        sendChat(mcname, `/w gm Resize of ${tokenName} complete.`);
+    };
+
+    // Converts a prototype hero NPC into an NPC formation
+    const BuildFormation = (token, char, charId, oldName, protoCount, recruitSource, formationType) => {
+        try {    
+            // Adjust stats
+            const speed = parseInt(getAttrCurrent(char, AttrEnum.NPC_SPEED)) || 0;
+            setAttr(charId, AttrEnum.NPC_SPEED, 10 * speed);
+            const commanderAttackModDelta = parseInt(getAttrCurrent(char, AttrEnum.INT_MOD)) || 0;
+            setAttr(charId, AttrEnum.COMMANDER_TO_HIT, commanderAttackModDelta);
+    
+            // Add formation trait
+            const formTraitName = GetLegibleTrait(formationType, protoCount, recruitSource);
+            const formTraitDesc = '';
+            setAttr(charId, AttrEnum.SOURCE, recruitSource);
+            const traitID = OGLTrait.CreateOGLTrait(charId, formTraitName, formTraitDesc);
+            setAttr(charId, AttrEnum.LEGIBLE_TRAIT_ID, traitID);
+    
+            // Scale prototype up to formation scale
+            let hpMult = protoCount;
+            let damageMult = protoCount;
+            if (formationType === 'Infantry') {
+                hpMult *= 2;
+                damageMult /= 2;
+            }
+            ResizeFormation(token, oldName, char, charId, hpMult, damageMult, commanderAttackModDelta, protoCount);
+    
+            // Update Cache
+            cache[charId] = {
+                char: char,
+                isNPC: true,
+                isHero: false,
+                npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
+                cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
+                xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
+                ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
+                speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
+                formDetails: formTraitName
+            };
+    
+            // Inform User
+            sendChat(mcname, `/w gm Formation construction complete.`);
+        } catch (e) {
+            log('ERROR: ' + e.message);
+            log('STACK: ' + e.stack);
+            sendChat(mcname, 'ERROR OCCURRED IN FORMATION CONSTRUCTION!  Please review console log.');
+        }
     };
 
     on('chat:message', (msg) => {
@@ -1111,6 +1192,7 @@ on('ready', () => {
                 + HTag('Stance', 4)
                     + `[Guard](!mc -guard)`
                     + `[Defend](!mc -defend)`
+                    + `[Cooldown](!mc -cooldown)`
                 + HTag('Route', 4)
                     + `[Set](!mc -route ?{Route Degree|Not Routed,-1|0 Failures,0|1 Failure,1|2 Failures,2|3 Failures,3})`
                     + `[Tick](!mc -routeDamage)`
@@ -1125,7 +1207,10 @@ on('ready', () => {
                 + `[Upkeep](!mc -upkeep)`
                 + `[BR](!mc -battleRating)`
                 + `[History](!mc -history)`
-                + `[Make Formation](!mc -makeFormation ?{Input the number of prototypes in this formation} ?{What is the source of this formation|Conscripted|Levied|Manufactured|Mercenary} ?{What formation type is this|Infantry|Cavalry|Archers|Scouts|Mages})`
+            + HTag('Admin', 3)
+                + `[Set Intellect](!mc -setInt ?{Please type the new intelligence modifier of the commander})`
+                + `[Resize Formation](!mc -resize ?{Please type the new number of units in this formation})`
+                + `[Make Formation](!mc -makeFormation ?{Input the number of prototypes in this formation} ?{What is the source of this formation|Levied|Manufactured|Mercenary} ?{What formation type is this|Infantry|Cavalry|Archers|Scouts|Mages})`
             + LeftAlignDiv.Close
             + `}}`;
             sendChatToSource(msg, menuString);
@@ -1252,13 +1337,6 @@ on('ready', () => {
 
                             // Discount non-formation NPCs
                             if (!traits) {
-                                heroList.push(new Hero(tokenName, hp, hpm));
-                                return;
-                            }
-
-                            // Get formation values
-                            let formationTraitArray = traits.filter(trait => trait.get('current').includes('Formation of'));
-                            if(formationTraitArray.length === 0) {
                                 cacheEntry = {
                                     char: char,
                                     isNPC: isNPC,
@@ -1267,20 +1345,35 @@ on('ready', () => {
                                     cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
                                     xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
                                 };
+                                cache[tokenOwner] = cacheEntry;
                             } else {
-                                let formDetails = formationTraitArray[0].get('current');
-                                cacheEntry = {
-                                    char: char,
-                                    isNPC: isNPC,
-                                    isHero: false,
-                                    npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
-                                    cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
-                                    xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
-                                    ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
-                                    speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
-                                    formDetails: formDetails
-                                };
+                                // Get formation values
+                                let formationTraitArray = traits.filter(trait => trait.get('current').includes('Formation of'));
+                                if(formationTraitArray.length === 0) {
+                                    cacheEntry = {
+                                        char: char,
+                                        isNPC: isNPC,
+                                        isHero: true,
+                                        npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
+                                        cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
+                                        xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
+                                    };
+                                } else {
+                                    let formDetails = formationTraitArray[0].get('current');
+                                    cacheEntry = {
+                                        char: char,
+                                        isNPC: isNPC,
+                                        isHero: false,
+                                        npcType: getAttr(char, AttrEnum.NPC_TYPE).get('current'),
+                                        cr: parseInt(getAttr(char, AttrEnum.NPC_CR).get('current')),
+                                        xp: parseInt(getAttr(char, AttrEnum.NPC_XP).get('current')),
+                                        ac: parseInt(getAttr(char, AttrEnum.NPC_AC).get('current')),
+                                        speed: parseInt(getAttr(char, AttrEnum.NPC_SPEED).get('current')),
+                                        formDetails: formDetails
+                                    };
+                                }
                             }
+
                         } else {
                             cacheEntry = {
                                 char: char,
@@ -1311,10 +1404,9 @@ on('ready', () => {
                                 // Reformats the name as "[NAME] x[COUNT]" and strips off any "Copy of " strings.
                                 let charName = char.get(AttrEnum.CHAR_NAME);
                                 const oldName = charName.replace(/Copy of /g, "");
-                                let newName = oldName + ' x' + protoCount;
 
-                                sendChat(mcname, `/w gm Building new formation: ${newName}.  This may take a few seconds...`);
-                                setTimeout(BuildFormation, 100, formToken, char, char.id, oldName, newName, protoCount, recruitSource, formationType);
+                                sendChat(mcname, `/w gm Building new formation: ${formationType} ${oldName} x${protoCount}.  This may take a few seconds...`);
+                                setTimeout(BuildFormation, 100, formToken, char, char.id, oldName + ' x1', protoCount, recruitSource, formationType);
                             }
                         } else {
                             dlog(`Selected ${tokenName} is not an NPC`);
@@ -1583,6 +1675,10 @@ on('ready', () => {
                         const isGuarding = formToken.get(StatusIcons.Guard);
                         formToken.set(StatusIcons.Guard, !isGuarding);
                         addOperation(new Operation('Guarding', tokenName, selection._id, [], [new Diff(StatusIcons.Guard, isGuarding, !isGuarding)]));
+                    } else if (key === '-cooldown') {
+                        const isOnCooldown = formToken.get(StatusIcons.Cooldown);
+                        formToken.set(StatusIcons.Guard, !isOnCooldown);
+                        addOperation(new Operation('Cooling Down', tokenName, selection._id, [], [new Diff(StatusIcons.Cooldown, isOnCooldown, !isOnCooldown)]));
                     } else if (key === '-route') {
                         formToken.set(StatusIcons.Guard, false);
                         formToken.set(StatusIcons.Defend, false);
@@ -1660,6 +1756,30 @@ on('ready', () => {
 
                         // Print
                         PrintMorale(tokenName, morale);
+                    } else if (key === '-setInt') {
+                        if (tokens.length < 3) return;
+                        const newMod = parseInt(tokens[2]);
+                        const char = getCharByAny(tokenOwner);
+                        const oldMod = parseInt(getAttrCurrent(char, AttrEnum.COMMANDER_TO_HIT)) || 0;
+                        const delta = newMod - oldMod;
+                        const primeDescs = JSON.parse(getAttrCurrent(char, AttrEnum.PRIME_ACTION_DESC) || '{}') || {};
+                        const protoCount = parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 0;
+                        
+                        const actionIds = OGLAction.GetActionIds(tokenOwner);
+                        for (let fieldName in actionIds) {
+                            const actionId = actionIds[fieldName];
+                            const action = OGLAction.GetActionDetails(char, actionId);
+                            ScaleAction(tokenOwner, action, 1, delta, primeDescs, protoCount);
+                        }
+                        setAttr(tokenOwner, AttrEnum.COMMANDER_TO_HIT, newMod);
+                        sendChatToFormation(tokenName, 'INT Rescale', `The INT modifier of the commander of ${tokenName} has been changed from ${oldMod} to ${newMod}`);
+                    } else if (key === '-resize') {
+                        if (tokens.length < 3) return;
+                        let newCount = parseInt(tokens[2]) || 1;
+                        const char = getCharByAny(tokenOwner);
+                        const scale = newCount / (parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 1);
+                        sendChat(mcname, `/w gm Resizing formation: ${tokenName} to be ${newCount}.  This may take a few seconds...`);
+                        setTimeout(ResizeFormation, 100, formToken, tokenName, char, tokenOwner, scale, scale, 0, newCount);
                     } else {
                         dlog('Unrecognized Input');
                         sendChatToSource(msg, 'Unrecognized input.');
