@@ -10,7 +10,7 @@ if (typeof MarkStart != 'undefined') {MarkStart('MassCombat');}
 
 on('ready', () => {
     const mcname = 'MassCombat';
-    const v = 0.9;
+    const v = 1.0;
     const cache = {};
 
     const LogLevels = {
@@ -50,8 +50,8 @@ on('ready', () => {
             state.MassCombat.OperationHistory = [];
             state.MassCombat.OperationHistorySize = 20;
             state.MassCombat.OpId = 0;
-        } else if (state.MassCombat.Version < 0.9) {
-            state.MassCombat.Version = 0.9;
+        } else if (state.MassCombat.Version < 1.0) {
+            state.MassCombat.Version = 1.0;
         }
     }; ConfigureState();
 
@@ -1020,6 +1020,7 @@ on('ready', () => {
         let oldProtoCount = parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 1;
 
         // Load current hp.  Cap current at max in case we had temps or something.
+        const oldCurHP = parseInt(token.get(AttrEnum.HP)) || 0;
         let hpm = parseInt(token.get(AttrEnum.HPM)) || 0;
 
         // Scale hp and damage so that it matches up with an integer number of prototypes
@@ -1088,6 +1089,9 @@ on('ready', () => {
             const legibleTraitName = GetLegibleTrait(troopName, newProtoCount, source);
             setAttr(charId, OGLTrait.RepeatingPrefix + legibleID + OGLTrait.Name, legibleTraitName);
         }
+
+        // Update any aura if there is one
+        setTokenAura(token, oldCurHP, hpm, hpm);
 
         // Provide status update
         sendChat(mcname, `/w gm Resize of ${tokenName} complete.`);
@@ -1564,27 +1568,21 @@ on('ready', () => {
                     } else if (key === '-longrest') {
                         if (tokens.length < 3) return;
                         if (tokens[2] !== 'yes') return;
+
+                        // Calculate the difference
                         let newMax = hpm - fp;
-                        let reduxPerc = 1 - newMax/hpm;
-                        reduxPerc = +reduxPerc.toFixed(2);
-                        formToken.set(AttrEnum.HP, newMax);
-                        formToken.set(AttrEnum.HPM, newMax);
-                        formToken.set(AttrEnum.FP, 0);
-                        formToken.set(AttrEnum.FPM, newMax);
-                        formToken.set(AttrEnum.CP, 0);
-                        formToken.set(AttrEnum.CPM, newMax);
-                        setTokenAura(formToken, hp, newMax, newMax);
-                        let reduxScalar = 1-reduxPerc;
-                        addOperation(new Operation('Long Rest', tokenName, selection._id,
-                            [
-                                new Diff(AttrEnum.HP, hp, newMax),
-                                new Diff(AttrEnum.HPM, hpm, newMax),
-                                new Diff(AttrEnum.CP, cp, 0),
-                                new Diff(AttrEnum.CPM, hpm, newMax),
-                                new Diff(AttrEnum.FP, fp, 0),
-                                new Diff(AttrEnum.FPM, hpm, newMax)
-                            ], []));
-                        sendChatToFormation(tokenName, 'Long Rest', `${tokenName} has had CP converted to HP.<br>Requires manual reduction in damage by <b>${100*reduxPerc}%</b><br>(multiply by ${reduxScalar.toFixed(2)})`);
+                        const reduxScalar = newMax/hpm;
+                        const char = getCharByAny(tokenOwner);
+                        const oldProtoCount = parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 1;
+                        const newProtoCount = Math.ceil(reduxScalar * oldProtoCount);
+                        ResizeFormation(formToken, tokenName, char, tokenOwner, reduxScalar, reduxScalar, 0, newProtoCount);
+
+                        // Inform the user
+                        let longRestMsg = `${tokenName} has long rested, and CP converted to HP.`;
+                        if (newProtoCount < oldProtoCount) {
+                            longRestMsg += `<br/>Unfortunately, ${oldProtoCount-newProtoCount} of the ${oldProtoCount} troops have died.  This formation is now only <b>${newProtoCount}</b> strong.`;
+                        }
+                        sendChatToFormation(tokenName, 'Long Rest', longRestMsg);
                     } else if (key === '-upkeep') {
                         let upkeep = 0;
                         let buyPrice = 0;
