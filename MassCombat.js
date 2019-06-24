@@ -1013,6 +1013,28 @@ on('ready', () => {
         return `${formationType} Formation of ${protoCount} ${recruitSource} Troops`;
     };
 
+    // Renames the formation.
+    const RenameFormation = (token, char, charId, oldProtoCount, newProtoCount, oldName, overrideTroop = false) => {
+        let oldProtoTag = ' x' + oldProtoCount;
+        dlog('Old Proto Count: ' + oldProtoTag);
+        let troopName = oldName.substring(0, oldName.lastIndexOf(oldProtoTag));
+        let newName = (overrideTroop ? overrideTroop : troopName) + ' x' + newProtoCount;
+        char.set(AttrEnum.CHAR_NAME, newName);
+        token.set(AttrEnum.TOKEN_NAME, newName);
+        setAttr(charId, AttrEnum.NPC_CHAR_NAME, newName);
+
+        // Update legible trait
+        const source = getAttrCurrent(char, AttrEnum.SOURCE);
+        const legibleID = getAttrCurrent(char, AttrEnum.LEGIBLE_TRAIT_ID);
+        // In event it's freshly-created attr, don't redo this part
+        if (source && legibleID) {
+            troopName = overrideTroop ? overrideTroop : troopName;
+            const legibleTraitName = GetLegibleTrait(troopName, newProtoCount, source);
+            const legibleTraitAddress = OGLTrait.RepeatingPrefix + legibleID + OGLTrait.Name;
+            setAttr(charId, legibleTraitAddress, legibleTraitName);
+        }
+    };
+
     // Resizes a formation
     const ResizeFormation = (token, tokenName, char, charId, healthScale, damageScale, commanderAttackModDelta, newProtoCount) => {
         // Attempt to load the prototype count.  If it's not possible, that means this is a brand-new formation.
@@ -1024,15 +1046,12 @@ on('ready', () => {
         let hpm = parseInt(token.get(AttrEnum.HPM)) || 0;
 
         // Scale hp and damage so that it matches up with an integer number of prototypes
-        dlog('RAW: Health Scale=' + healthScale + ' Damage Scale=' + damageScale);
         if (healthScale < 1 || damageScale < 1) {
             // Establish the max hp of each soldier
             const protoHealth = hpm/oldProtoCount;
-            dlog('  Proto Health=' + protoHealth);
             
             // Find the new maximum hp
             const newMaxHP = protoHealth * newProtoCount;
-            dlog('  New Max HP=' + newMaxHP);
 
             // Recalculate the scale factors to result in integers for future math.
             healthScale = newMaxHP / hpm;
@@ -1041,17 +1060,10 @@ on('ready', () => {
             damageScale = newMaxHP / hpm;
         }
         hpm = Math.round(hpm*healthScale);
-        dlog('ROUNDED: Health Scale=' + healthScale + ' Damage Scale=' + damageScale);
         setAttr(charId, AttrEnum.NPC_HP, hpm, hpm);
 
         // Rename
-        let oldProtoTag = ' x' + oldProtoCount;
-        dlog('Old Proto Count: ' + oldProtoTag);
-        let troopName = tokenName.substring(0, tokenName.indexOf(oldProtoTag));
-        let newName = troopName + ' x' + newProtoCount;
-        char.set(AttrEnum.CHAR_NAME, newName);
-        token.set(AttrEnum.TOKEN_NAME, newName);
-        setAttr(charId, AttrEnum.NPC_CHAR_NAME, newName);
+        RenameFormation(token, char, charId, oldProtoCount, newProtoCount, tokenName);
 
         // Load and Rescale Actions
         const oldPrimeDescs = getAttrCurrent(char, AttrEnum.PRIME_ACTION_DESC);
@@ -1067,7 +1079,6 @@ on('ready', () => {
         setAttr(charId, AttrEnum.PRIME_ACTION_DESC, JSON.stringify(primeActionDescs));// Resave in case the user altered the list when we weren't looking
 
         // Update current token
-        token.set(AttrEnum.TOKEN_NAME, newName);
         token.set(AttrEnum.HP, hpm);
         token.set(AttrEnum.HPM, hpm);
         token.set(AttrEnum.FP, 0);
@@ -1080,15 +1091,6 @@ on('ready', () => {
 
         // Update prototype count
         setAttr(charId, AttrEnum.FORMATION, newProtoCount);
-
-        // Update legible trait
-        const source = getAttrCurrent(char, AttrEnum.SOURCE);
-        const legibleID = getAttrCurrent(char, AttrEnum.LEGIBLE_TRAIT_ID);
-        // In event it's freshly-created attr, don't redo this part
-        if (source && legibleID) {
-            const legibleTraitName = GetLegibleTrait(troopName, newProtoCount, source);
-            setAttr(charId, OGLTrait.RepeatingPrefix + legibleID + OGLTrait.Name, legibleTraitName);
-        }
 
         // Update any aura if there is one
         setTokenAura(token, oldCurHP, hpm, hpm);
@@ -1213,6 +1215,7 @@ on('ready', () => {
                 + `[History](!mc -history)`
             + HTag('Admin', 3)
                 + `[Set Intellect](!mc -setInt ?{Please type the new intelligence modifier of the commander})`
+                + `[Rename](!mc -rename ^?{Please type the new formation name}^)`
                 + `[Resize Formation](!mc -resize ?{Please type the new number of units in this formation})`
                 + `[Make Formation](!mc -makeFormation ?{Input the number of prototypes in this formation} ?{What is the source of this formation|Levied|Manufactured|Mercenary} ?{What formation type is this|Infantry|Cavalry|Archers|Scouts|Mages})`
             + LeftAlignDiv.Close
@@ -1778,6 +1781,13 @@ on('ready', () => {
                         const scale = newCount / (parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 1);
                         sendChat(mcname, `/w gm Resizing formation: ${tokenName} to be ${newCount}.  This may take a few seconds...`);
                         setTimeout(ResizeFormation, 100, formToken, tokenName, char, tokenOwner, scale, scale, 0, newCount);
+                    } else if (key === '-rename') {
+                        if (tokens.length < 3) return;
+                        let newName = Decaret(msg.content);
+                        const char = getCharByAny(tokenOwner);
+                        const oldProtoCount = parseInt(getAttrCurrent(char, AttrEnum.FORMATION)) || 1;
+                        RenameFormation(formToken, char, tokenOwner, oldProtoCount, oldProtoCount, tokenName, newName);
+                        setDefaultTokenForCharacter(char, formToken);
                     } else {
                         dlog('Unrecognized Input');
                         sendChatToSource(msg, 'Unrecognized input.');
