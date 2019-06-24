@@ -21,7 +21,7 @@ on('ready', () => {
         Error: 4,
         Fatal: 5
     };
-    let logLevel = LogLevels.Debug;
+    let logLevel = LogLevels.Info;
 
     // Trace Log
     const tlog = (str) => {
@@ -368,7 +368,6 @@ on('ready', () => {
 
     const sendChatToFormation = (tokenName, title, text) => {
         const msg = `/w "${tokenName}" &{template:desc} {{desc=<h3>${title}</h3><hr>${LeftAlignDiv.Open}${text}${LeftAlignDiv.Close}}}`;
-        dlog(msg);
         sendChat(mcname, msg);
     };
 
@@ -510,8 +509,6 @@ on('ready', () => {
             'showplayers_aura1': showAura,
             'status_dead': isDead
         };
-
-        dlog("Aura Params: " + JSON.stringify(params));
         
         formToken.set(params);
     };
@@ -538,7 +535,6 @@ on('ready', () => {
                 maxHP = parseInt(formToken.get(AttrEnum.HPM)) || 0 ;
             }
             barReverts.push(new Diff(diff.Type, live, diff.Old));
-            dlog('Set ' + op.TokenId + '\' ' + diff.Type + ' from ' + live + ' to ' + diff.Old);
             formToken.set(diff.Type, diff.Old);
         }
 
@@ -548,7 +544,6 @@ on('ready', () => {
             const strippedType = StripStatus(diff.Type);
             const live = GetStatusValue(formToken, strippedType);
             iconReverts.push(new Diff(diff.Type, live, diff.Old));
-            dlog('Set ' + op.TokenId + '\' ' + diff.Type + ' from ' + live + ' to ' + diff.Old);
             UpdateStatusValue(formToken, strippedType, diff.Old);
         }
 
@@ -581,7 +576,6 @@ on('ready', () => {
     const GetMorale = (char, cr) => {
         let attr = getAttr(char, AttrEnum.MORALE);
         if (!attr) {
-            dlog('Morale Attr does not exist yet');
             const commanderCha = (cr/2).toFixed(0);
             const factors = [
                 new MoraleFactor('Rest', 0),
@@ -598,13 +592,11 @@ on('ready', () => {
             ];
             const morale = new Morale(commanderCha, factors);
             const moraleStr = JSON.stringify(morale);
-            dlog('New Morale String: ' + moraleStr);
             setAttr(char.id, AttrEnum.MORALE, moraleStr);
             return morale;
         }
 
         const attrCurrent = attr.get('current');
-        dlog('Load existing morale attr.' + attrCurrent);
         return JSON.parse(attrCurrent);
     };
 
@@ -637,7 +629,6 @@ on('ready', () => {
             desc = 'Unbreakable';
         }
 
-        dlog('Get Morale Rating: ' + morale + ' = ' + desc);
         return {
             Value: morale,
             Description: desc
@@ -686,7 +677,6 @@ on('ready', () => {
         }
         moraleMsg += `<hr>${HTag('Leadership Check', 4)}[[d20${deltas}]]`;
         
-        dlog('Sending Morale to ' + name + ': ' + moraleMsg);
         sendChatToFormation(name, 'Morale', moraleMsg);
         return moraleMsg;
     };
@@ -807,7 +797,6 @@ on('ready', () => {
             const name = OGLTrait.GetTraitAttrCur(char, traitId, OGLTrait.Name);
             const desc = OGLTrait.GetTraitAttrCur(char, traitId, OGLTrait.Description);
             const trait = new Trait(traitId, name, desc);
-            dlog('Trait: ' + JSON.stringify(trait));
             return trait;
         },
 
@@ -919,7 +908,6 @@ on('ready', () => {
             const rollbase = OGLAction.GetActionAttr(char, actionId, OGLAction.Rollbase);
 
             const action = new Action(actionId, name, isAttack, attackParams, showDesc, desc, rollbase);
-            dlog('Action: ' + JSON.stringify(action));
             return action;
         }
     };
@@ -1016,7 +1004,6 @@ on('ready', () => {
     // Renames the formation.
     const RenameFormation = (token, char, charId, oldProtoCount, newProtoCount, oldName, overrideTroop = false) => {
         let oldProtoTag = ' x' + oldProtoCount;
-        dlog('Old Proto Count: ' + oldProtoTag);
         let troopName = oldName.substring(0, oldName.lastIndexOf(oldProtoTag));
         let newName = (overrideTroop ? overrideTroop : troopName) + ' x' + newProtoCount;
         char.set(AttrEnum.CHAR_NAME, newName);
@@ -1437,7 +1424,6 @@ on('ready', () => {
                     let sourceCreature = formTokens[4];
                     if (formTokens.length > 5) {
                         let sourceCreatureIndex = formDetails.indexOf(formTokens[5]);
-                        dlog('Source Index: ' + sourceCreatureIndex);
                         sourceCreature = formDetails.substr(sourceCreatureIndex);
                     }
     
