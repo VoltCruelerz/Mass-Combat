@@ -14,7 +14,7 @@
         "token.bar*": "read,write",
         "char.[npcstat]": "read,write",
         "char.[traits]": "read,write",
-        "char.[actions]": "read,write",
+        "char.[actions]": "read,write"
     },
     "conflicts": []
 }
