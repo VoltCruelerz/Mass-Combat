@@ -21,7 +21,7 @@ on('ready', () => {
         Error: 4,
         Fatal: 5
     };
-    let logLevel = LogLevels.Info;
+    let logLevel = LogLevels.Debug;
 
     // Trace Log
     const tlog = (str) => {
@@ -308,7 +308,7 @@ on('ready', () => {
         Routed: "status_chained-heart",
         Guard: "status_sentry-gun",
         Defend: "status_bolt-shield",
-        Cooldown: "half-haze",
+        Cooldown: "status_half-haze",
         Disorganized: "status_rolling-bomb",
         Recovering: "status_half-heart",
         Dead: "status_dead"
@@ -426,7 +426,8 @@ on('ready', () => {
         COMMANDER_TO_HIT: 'mc_commander_to_hit',
         PRIME_ACTION_DESC: 'mc_prime_action_descriptions',
         SOURCE: 'mc_source',
-        LEGIBLE_TRAIT_ID: 'mc_legible_trait_id'
+        LEGIBLE_TRAIT_ID: 'mc_legible_trait_id',
+        FORMATION_TYPE: 'mc_formation_type'
     };
 
     const DiffDict = {};
@@ -440,6 +441,7 @@ on('ready', () => {
         DiffDict[StatusIcons.Routed] = 'Routed';
         DiffDict[StatusIcons.Guard] = 'Guarding';
         DiffDict[StatusIcons.Defend] = 'Defending';
+        DiffDict[StatusIcons.Cooldown] = 'Cooling Down';
         DiffDict[StatusIcons.Disorganized] = 'Disorganization';
         DiffDict[StatusIcons.Recovering] = 'Recovering';
         DiffDict[StatusIcons.Dead] = 'Dead';
@@ -803,8 +805,16 @@ on('ready', () => {
         // Creates and sets the value of a new Trait
         CreateOGLTrait: (charId, name, description) => {
             const traitId = GenerateUUID()();
+            dlog('New Trait UUID: ' + traitId);
+            dlog('BEFORE CREATION ====================================================');
+            OGLTrait.DumpTraits(charId);
+
+            // Actually create the attribute.  Set creates if it does not exist.
             setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Name, name);
             setAttr(charId, OGLTrait.RepeatingPrefix + traitId + OGLTrait.Description, description);
+            
+            dlog('AFTER CREATION =====================================================');
+            OGLTrait.DumpTraits(charId);
             return traitId;
         },
         
@@ -997,8 +1007,8 @@ on('ready', () => {
         return true;
     };
 
-    const GetLegibleTrait = (formationType, protoCount, recruitSource) => {
-        return `${formationType} Formation of ${protoCount} ${recruitSource} Troops`;
+    const GetLegibleTrait = (formationType, troopName, protoCount, recruitSource) => {
+        return `${formationType} Formation of ${protoCount} ${recruitSource} ${troopName}`;
     };
 
     // Renames the formation.
@@ -1006,6 +1016,7 @@ on('ready', () => {
         let oldProtoTag = ' x' + oldProtoCount;
         let troopName = oldName.substring(0, oldName.lastIndexOf(oldProtoTag));
         let newName = (overrideTroop ? overrideTroop : troopName) + ' x' + newProtoCount;
+        dlog('New Name: ' + newName);
         char.set(AttrEnum.CHAR_NAME, newName);
         token.set(AttrEnum.TOKEN_NAME, newName);
         setAttr(charId, AttrEnum.NPC_CHAR_NAME, newName);
@@ -1013,12 +1024,28 @@ on('ready', () => {
         // Update legible trait
         const source = getAttrCurrent(char, AttrEnum.SOURCE);
         const legibleID = getAttrCurrent(char, AttrEnum.LEGIBLE_TRAIT_ID);
+        const formationType = getAttrCurrent(char, AttrEnum.FORMATION_TYPE);
+        dlog('Source: ' + source);
+        dlog('Legible ID: ' + legibleID);
         // In event it's freshly-created attr, don't redo this part
         if (source && legibleID) {
             troopName = overrideTroop ? overrideTroop : troopName;
-            const legibleTraitName = GetLegibleTrait(troopName, newProtoCount, source);
+            const legibleTraitName = GetLegibleTrait(formationType, troopName, newProtoCount, source);
+            dlog('Legible Trait Name: ' + legibleTraitName);
             const legibleTraitAddress = OGLTrait.RepeatingPrefix + legibleID + OGLTrait.Name;
+            dlog('Legible Trait Address: ' + legibleTraitAddress);
+            dlog('Before ===================================');
+            OGLTrait.DumpTraits(charId);
             setAttr(charId, legibleTraitAddress, legibleTraitName);
+            dlog('After ====================================');
+            OGLTrait.DumpTraits(charId);
+
+            // Warn user of bug
+            const url = `https://app.roll20.net/forum/post/7553584/ogl-sheet-not-updating-when-creating-trait-from-api/?pageforid=7555924#post-7555924`;
+            const msg = `/w gm Due to a bug with Roll20's API ([click here for details](${url})), you may experience odd behavior where the formation trait is not set VISIBLY on the character sheet.`
+                + `  I assure you it is still set under the hood, and should still work for the script.  However, in the event you would like to see it, you may manually set it.  `
+                + `The value it should be is: ${Bold(legibleTraitName)}`;
+            sendChat(mcname, msg);
         }
     };
 
@@ -1096,11 +1123,12 @@ on('ready', () => {
             setAttr(charId, AttrEnum.COMMANDER_TO_HIT, commanderAttackModDelta);
     
             // Add formation trait
-            const formTraitName = GetLegibleTrait(formationType, protoCount, recruitSource);
+            const formTraitName = GetLegibleTrait(formationType, oldName, protoCount, recruitSource);
             const formTraitDesc = '';
             setAttr(charId, AttrEnum.SOURCE, recruitSource);
             const traitID = OGLTrait.CreateOGLTrait(charId, formTraitName, formTraitDesc);
             setAttr(charId, AttrEnum.LEGIBLE_TRAIT_ID, traitID);
+            setAttr(charId, AttrEnum.FORMATION_TYPE, formationType);
     
             // Scale prototype up to formation scale
             let hpMult = protoCount;
@@ -1664,7 +1692,7 @@ on('ready', () => {
                         addOperation(new Operation('Guarding', tokenName, selection._id, [], [new Diff(StatusIcons.Guard, isGuarding, !isGuarding)]));
                     } else if (key === '-cooldown') {
                         const isOnCooldown = formToken.get(StatusIcons.Cooldown);
-                        formToken.set(StatusIcons.Guard, !isOnCooldown);
+                        formToken.set(StatusIcons.Cooldown, !isOnCooldown);
                         addOperation(new Operation('Cooling Down', tokenName, selection._id, [], [new Diff(StatusIcons.Cooldown, isOnCooldown, !isOnCooldown)]));
                     } else if (key === '-route') {
                         formToken.set(StatusIcons.Guard, false);
